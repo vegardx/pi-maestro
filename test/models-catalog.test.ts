@@ -35,9 +35,9 @@ const FAMILIES = {
 
 const ROSTERS = {
 	daily: {
-		light: ["OpenAI/GPT 5.6 Sol"],
-		standard: ["OpenAI/GPT 5.6 Sol", "Anthropic/Opus 4.8"],
-		heavy: ["Anthropic/Opus 4.8"],
+		fast: ["OpenAI/GPT 5.6 Sol"],
+		light: ["OpenAI/GPT 5.6 Sol", "Anthropic/Opus 4.8"],
+		frontier: ["Anthropic/Opus 4.8"],
 	},
 };
 
@@ -65,7 +65,7 @@ describe("v2 model config", () => {
 			families: FAMILIES,
 			rosters: ROSTERS,
 			bindings: { main: { roster: "daily" } },
-			allowances: { "deliverable-worker": { tiers: ["standard"] } },
+			allowances: { "deliverable-worker": { tiers: ["light"] } },
 		});
 		const config = readModelsConfig(cwd, undefined, TRUSTED);
 		expect(config).toBeDefined();
@@ -76,17 +76,27 @@ describe("v2 model config", () => {
 		expect(config?.families.OpenAI.aliases["GPT 5.6 Sol"].attach).toHaveLength(
 			2,
 		);
-		expect(config?.rosters.daily.standard).toHaveLength(2);
+		expect(config?.rosters.daily.light).toHaveLength(2);
 		expect(config?.bindings.main.roster).toBe("daily");
 		// Authored allowance wins for its persona; the rest keep defaults.
-		expect(config?.allowances["deliverable-worker"].tiers).toEqual([
-			"standard",
-		]);
+		expect(config?.allowances["deliverable-worker"].tiers).toEqual(["light"]);
 		expect(config?.allowances["codebase-research"].tiers).toEqual([
 			"light",
-			"standard",
+			"fast",
+			"normal",
 		]);
-		expect(config?.allowances.standby.tiers).toEqual(["heavy", "standard"]);
+		expect(config?.allowances["code-review"]).toEqual({
+			tiers: ["light", "normal"],
+			spread: 3,
+		});
+		expect(config?.allowances.adjudication.tiers).toEqual([
+			"frontier",
+			"normal",
+		]);
+		expect(config?.allowances.standby).toEqual({
+			tiers: ["frontier", "normal"],
+			spread: 2,
+		});
 	});
 
 	it("accepts free-text persona keys and validates the direct selector", () => {
@@ -95,19 +105,21 @@ describe("v2 model config", () => {
 		writeSettings({
 			families: FAMILIES,
 			allowances: {
-				"deep-research": { tiers: ["heavy"], direct: "other-family" },
+				"deep-research": { tiers: ["frontier"], direct: "other-family" },
 			},
 		});
 		expect(
 			readModelsConfig(cwd, undefined, TRUSTED)?.allowances["deep-research"],
 		).toEqual({
-			tiers: ["heavy"],
+			tiers: ["frontier"],
 			direct: "other-family",
 		});
 
 		writeSettings({
 			families: FAMILIES,
-			allowances: { "code-review": { tiers: ["heavy"], direct: "sideways" } },
+			allowances: {
+				"code-review": { tiers: ["frontier"], direct: "sideways" },
+			},
 		});
 		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
 			"direct: must be one of inherit, other-family",
@@ -147,7 +159,7 @@ describe("v2 model config", () => {
 
 		writeSettings({
 			families: FAMILIES,
-			rosters: { bad: { standard: ["noslash"] } },
+			rosters: { bad: { light: ["noslash"] } },
 		});
 		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
 			'"Family/Alias" ref',
@@ -156,7 +168,7 @@ describe("v2 model config", () => {
 		writeSettings({
 			families: FAMILIES,
 			rosters: {
-				bad: { standard: ["OpenAI/GPT 5.6 Sol", "OpenAI/GPT 5.6 Sol"] },
+				bad: { light: ["OpenAI/GPT 5.6 Sol", "OpenAI/GPT 5.6 Sol"] },
 			},
 		});
 		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
@@ -164,10 +176,28 @@ describe("v2 model config", () => {
 		);
 	});
 
+	it("refuses the retired standard and heavy tier names as unknown", () => {
+		writeSettings({
+			families: FAMILIES,
+			rosters: { old: { standard: ["OpenAI/GPT 5.6 Sol"] } },
+		});
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"unknown tier standard (tiers are exactly fast, light, normal, frontier)",
+		);
+
+		writeSettings({
+			families: FAMILIES,
+			allowances: { "code-review": { tiers: ["heavy"] } },
+		});
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"must be a unique non-empty array of fast|light|normal|frontier",
+		);
+	});
+
 	it("cross-validates roster refs, binding rosters, targets, and default count", () => {
 		writeSettings({
 			families: FAMILIES,
-			rosters: { daily: { standard: ["OpenAI/Missing"] } },
+			rosters: { daily: { light: ["OpenAI/Missing"] } },
 		});
 		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
 			"unknown alias OpenAI/Missing",

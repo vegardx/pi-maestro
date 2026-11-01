@@ -17,19 +17,32 @@ explicitly.
 | Layer | Purpose |
 | --- | --- |
 | families → aliases → attachments | Group equivalent concrete `provider/model` endpoints |
-| rosters → tiers | Order aliases for `light`, `standard`, and `heavy` work |
+| rosters → tiers | Order aliases for `fast`, `light`, `normal`, and `frontier` work |
 | bindings | Select a roster from the current seat model |
 | allowances | Bound the tiers a named support persona may request |
 | region | Exclude concrete models outside the active residency list |
 
-The current harness roles map to the `codebase-research` support persona, whose
-default allowance is:
+The tiers have fixed meanings:
 
-```json
-{
-  "tiers": ["light", "standard"]
-}
-```
+| Tier | For |
+| --- | --- |
+| `fast` | Narrow mechanical checks and classification; executes, never decides |
+| `light` | The default implementer and the in-package review lens |
+| `normal` | A crossed boundary, a persisted format, concurrency or security, large input, validating `fast` work |
+| `frontier` | Judgement only (adjudication, synthesis); never an implementer, never fanned out |
+
+Built-in allowances, overridable per persona under `models.allowances`. The
+first tier is the one a persona resolves at when the caller names none:
+
+| Persona | Tiers | Spread |
+| --- | --- | --- |
+| `codebase-research` | `light`, `fast`, `normal` | |
+| `code-review` | `light`, `normal` | 3 |
+| `adjudication` | `frontier`, `normal` | |
+| `standby` | `frontier`, `normal` | 2 |
+| `deliverable-worker` | none (inherits the seat model) | |
+
+The current harness roles map to the `codebase-research` support persona.
 
 The Bash classifier explicitly requests `light`. Smart compact uses the
 persona's default tier. An exact classifier model may be configured under

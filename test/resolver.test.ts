@@ -39,16 +39,16 @@ const SETTINGS = {
 		},
 		rosters: {
 			daily: {
-				light: ["OpenAI/Quick"],
-				standard: ["OpenAI/Sol", "Moonshot/Kimi"],
-				heavy: ["Anthropic/Opus"],
+				fast: ["OpenAI/Quick"],
+				light: ["OpenAI/Sol", "Moonshot/Kimi"],
+				frontier: ["Anthropic/Opus"],
 			},
 		},
 		bindings: { main: { roster: "daily" } },
 		// The built-in deliverable-worker default is empty (inherit the session
 		// model), so these tier-mechanics tests configure it explicitly. The
 		// default is covered separately in "default persona allowances".
-		allowances: { "deliverable-worker": { tiers: ["standard", "heavy"] } },
+		allowances: { "deliverable-worker": { tiers: ["light", "frontier"] } },
 	},
 };
 
@@ -137,7 +137,7 @@ describe("alias resolution", () => {
 		// Seat is gw2; Sol lists gw1/sol FIRST, but gw2 is the agent's gateway.
 		const resolution = router({ seat: "gw2/seat" }).resolve({
 			persona: "deliverable-worker",
-			tier: "standard",
+			tier: "light",
 			inherit: { modelId: "gw2/seat", effort: "medium" },
 		});
 		expect(resolution).toMatchObject({
@@ -146,7 +146,7 @@ describe("alias resolution", () => {
 			family: "OpenAI",
 			alias: "Sol",
 			attachmentProvider: "gw2",
-			tier: "standard",
+			tier: "light",
 			bindingId: "main",
 			rosterId: "daily",
 		});
@@ -158,7 +158,7 @@ describe("alias resolution", () => {
 		const resolution = router({
 			seat: "gw2/seat",
 			unavailable: ["gw2/sol"],
-		}).resolve({ persona: "deliverable-worker", tier: "standard" });
+		}).resolve({ persona: "deliverable-worker", tier: "light" });
 		expect(resolution).toMatchObject({
 			source: "tier",
 			modelId: "gw1/sol",
@@ -170,7 +170,7 @@ describe("alias resolution", () => {
 	it("walks to the next alias when the first alias has no attachment available", () => {
 		const resolution = router({
 			unavailable: ["gw1/sol", "gw2/sol"],
-		}).resolve({ persona: "deliverable-worker", tier: "standard" });
+		}).resolve({ persona: "deliverable-worker", tier: "light" });
 		expect(resolution).toMatchObject({
 			source: "tier",
 			modelId: "gw2/kimi",
@@ -186,7 +186,7 @@ describe("alias resolution", () => {
 	it("returns effort verbatim for an alias with a fixed effort and no allowlist", () => {
 		const resolution = router().resolve({
 			persona: "codebase-research",
-			tier: "light",
+			tier: "fast",
 		});
 		expect(resolution.modelId).toBe("gw1/quick");
 		expect(resolution.effort).toBe("low");
@@ -207,14 +207,14 @@ describe("alias resolution", () => {
 
 describe("allowances", () => {
 	it("bounds deliberate tier references to the persona's allowance", () => {
-		// deliverable-worker is configured here as {standard, heavy} — light is out.
+		// deliverable-worker is configured here as {light, frontier} — fast is out.
 		expect(() =>
-			router().resolve({ persona: "deliverable-worker", tier: "light" }),
+			router().resolve({ persona: "deliverable-worker", tier: "fast" }),
 		).toThrow(ModelResolutionError);
-		// codebase-research's allowance includes light.
+		// codebase-research's allowance includes fast.
 		const resolution = router().resolve({
 			persona: "codebase-research",
-			tier: "light",
+			tier: "fast",
 		});
 		expect(resolution.modelId).toBe("gw1/quick");
 	});
@@ -223,12 +223,14 @@ describe("allowances", () => {
 		// A free-text persona key is a first-class allowance — nothing enumerates
 		// valid personas at parse time.
 		const settings = settingsWith({
-			allowances: { "deep-research": { tiers: ["heavy"] } },
+			allowances: { "deep-research": { tiers: ["frontier"] } },
 		});
-		expect(router({ settings }).defaultTierFor("deep-research")).toBe("heavy");
+		expect(router({ settings }).defaultTierFor("deep-research")).toBe(
+			"frontier",
+		);
 		const resolution = router({ settings }).resolve({
 			persona: "deep-research",
-			tier: "heavy",
+			tier: "frontier",
 		});
 		expect(resolution).toMatchObject({
 			source: "tier",
@@ -259,8 +261,9 @@ describe("default persona allowances", () => {
 		const configured = router({ settings });
 		expect(configured.defaultTierFor("deliverable-worker")).toBeUndefined();
 		expect(configured.defaultTierFor("codebase-research")).toBe("light");
-		expect(configured.defaultTierFor("code-review")).toBe("standard");
-		expect(configured.defaultTierFor("standby")).toBe("heavy");
+		expect(configured.defaultTierFor("code-review")).toBe("light");
+		expect(configured.defaultTierFor("adjudication")).toBe("frontier");
+		expect(configured.defaultTierFor("standby")).toBe("frontier");
 		// With no tier, the worker resolves to the seat (source: inherit).
 		expect(configured.resolve({ persona: "deliverable-worker" })).toMatchObject(
 			{ source: "inherit", modelId: "gw2/seat" },
@@ -273,11 +276,11 @@ describe("default persona allowances", () => {
 		// built-in persona defaults answer instead — graceful, never a crash.
 		const configured = router({
 			settings: settingsWith({
-				allowances: { reviewer: { tiers: ["light"] } },
+				allowances: { reviewer: { tiers: ["fast"] } },
 			}),
 		});
-		expect(configured.defaultTierFor("code-review")).toBe("standard");
-		expect(configured.defaultTierFor("reviewer")).toBe("light");
+		expect(configured.defaultTierFor("code-review")).toBe("light");
+		expect(configured.defaultTierFor("reviewer")).toBe("fast");
 	});
 });
 
@@ -289,7 +292,7 @@ describe("region", () => {
 			settings: settingsWith({
 				region: { active: "EEA", lists: { EEA: ["gw1/*"] } },
 			}),
-		}).resolve({ persona: "deliverable-worker", tier: "standard" });
+		}).resolve({ persona: "deliverable-worker", tier: "light" });
 		expect(resolution.modelId).toBe("gw1/sol");
 	});
 
@@ -298,14 +301,14 @@ describe("region", () => {
 			settings: settingsWith({
 				region: { active: "EEA", lists: { EEA: ["gw9/*"] } },
 			}),
-		}).resolve({ persona: "deliverable-worker", tier: "standard" });
+		}).resolve({ persona: "deliverable-worker", tier: "light" });
 		expect(resolution.source).toBe("fallback");
 		expect(resolution.modelId).toBe("gw2/seat");
 	});
 
 	// Mirrors the real SIT tripwire (see reference-gateway-region-models): a
 	// functional but NON-EEA model (US-data-share Fable, here gw2/fable) leads the
-	// heavy tier; under EEA it is struck and resolution lands on the EEA-legal
+	// frontier tier; under EEA it is struck and resolution lands on the EEA-legal
 	// model (gw1/opus); flip the active region to Global and it resolves the gated
 	// model itself — a real positive and a true negative in one config.
 	describe("the tripwire", () => {
@@ -320,13 +323,13 @@ describe("region", () => {
 			},
 			rosters: {
 				daily: {
+					fast: ["Anthropic/Opus"],
 					light: ["Anthropic/Opus"],
-					standard: ["Anthropic/Opus"],
-					heavy: ["Anthropic/Fable", "Anthropic/Opus"],
+					frontier: ["Anthropic/Fable", "Anthropic/Opus"],
 				},
 			},
 			bindings: { main: { roster: "daily" } },
-			allowances: { "code-review": { tiers: ["heavy"] } },
+			allowances: { "code-review": { tiers: ["frontier"] } },
 			region: {
 				active: "EEA",
 				lists: { Global: ["gw1/*", "gw2/*"], EEA: ["gw1/*"] },
@@ -337,7 +340,7 @@ describe("region", () => {
 			const resolution = router({
 				seat: "gw1/seat",
 				settings: { models: TRIPWIRE },
-			}).resolve({ persona: "code-review", tier: "heavy" });
+			}).resolve({ persona: "code-review", tier: "frontier" });
 			expect(resolution.modelId).toBe("gw1/opus");
 			const fable = resolution.candidates?.find(
 				(fact) => fact.ref === "Anthropic/Fable",
@@ -355,7 +358,7 @@ describe("region", () => {
 						region: { ...TRIPWIRE.region, active: "Global" },
 					},
 				},
-			}).resolve({ persona: "code-review", tier: "heavy" });
+			}).resolve({ persona: "code-review", tier: "frontier" });
 			expect(resolution.modelId).toBe("gw2/fable");
 		});
 	});
@@ -367,13 +370,13 @@ describe("session fallback", () => {
 			unavailable: ["gw1/sol", "gw2/sol", "gw2/kimi"],
 		}).resolve({
 			persona: "deliverable-worker",
-			tier: "standard",
+			tier: "light",
 			inherit: { modelId: "gw2/seat" },
 		});
 		expect(resolution).toMatchObject({
 			source: "fallback",
 			modelId: "gw2/seat",
-			tier: "standard",
+			tier: "light",
 		});
 		expect(resolution.fallbackReason).toContain("unavailable");
 		expect(fallbackNotice(resolution)).toContain("running on the session");
@@ -382,9 +385,9 @@ describe("session fallback", () => {
 	it("an empty tier falls back with an accurate reason", () => {
 		const resolution = router({
 			settings: settingsWith({
-				rosters: { daily: { ...SETTINGS.models.rosters.daily, heavy: [] } },
+				rosters: { daily: { ...SETTINGS.models.rosters.daily, frontier: [] } },
 			}),
-		}).resolve({ persona: "deliverable-worker", tier: "heavy" });
+		}).resolve({ persona: "deliverable-worker", tier: "frontier" });
 		expect(resolution.source).toBe("fallback");
 		expect(resolution.fallbackReason).toContain("empty");
 	});
@@ -395,7 +398,7 @@ describe("failure semantics", () => {
 		expect(() =>
 			router({ settings: {} }).resolve({
 				persona: "deliverable-worker",
-				tier: "standard",
+				tier: "light",
 			}),
 		).toThrow("no v2 roster");
 
@@ -406,24 +409,24 @@ describe("failure semantics", () => {
 						families: SETTINGS.models.families,
 						rosters: SETTINGS.models.rosters,
 						bindings: { main: { targets: ["gw9/other"], roster: "daily" } },
-						// The persona must allow standard to reach the binding check.
-						allowances: { "deliverable-worker": { tiers: ["standard"] } },
+						// The persona must allow light to reach the binding check.
+						allowances: { "deliverable-worker": { tiers: ["light"] } },
 					},
 				},
-			}).resolve({ persona: "deliverable-worker", tier: "standard" }),
+			}).resolve({ persona: "deliverable-worker", tier: "light" }),
 		).toThrow("no binding is active");
 	});
 });
 
 describe("explain output", () => {
 	it("renders every ref's fact and the allowance verdict", () => {
-		const explained = router().explain("deliverable-worker", "standard");
+		const explained = router().explain("deliverable-worker", "light");
 		expect(explained.allowed).toBe(true);
 		expect(explained.bindingId).toBe("main");
 		expect(explained.rosterId).toBe("daily");
 		expect(explained.candidates).toHaveLength(2);
 
-		expect(router().explain("deliverable-worker", "light").allowed).toBe(false);
+		expect(router().explain("deliverable-worker", "fast").allowed).toBe(false);
 	});
 });
 
@@ -436,7 +439,7 @@ describe("resolveMany (top-N)", () => {
 	it("n=1 is exactly resolve", () => {
 		const request = {
 			persona: "deliverable-worker" as const,
-			tier: "standard" as const,
+			tier: "light" as const,
 		};
 		const [one] = router().resolveMany(request, 1);
 		expect(one).toEqual(router().resolve(request));
@@ -457,9 +460,9 @@ describe("resolveMany (top-N)", () => {
 	});
 
 	it("returns one slot per DISTINCT family", () => {
-		// standard = [OpenAI/Sol, Moonshot/Kimi] — two families.
+		// light = [OpenAI/Sol, Moonshot/Kimi] — two families.
 		const slots = router().resolveMany(
-			{ persona: "deliverable-worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "light" },
 			2,
 		);
 		expect(slots).toHaveLength(2);
@@ -471,7 +474,7 @@ describe("resolveMany (top-N)", () => {
 		// Asking for 5 from a two-family tier yields 2 — not 5, and not 2 real
 		// plus 3 seat copies dressed up as diversity.
 		const slots = router().resolveMany(
-			{ persona: "deliverable-worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "light" },
 			5,
 		);
 		expect(slots).toHaveLength(2);
@@ -481,7 +484,7 @@ describe("resolveMany (top-N)", () => {
 	it("degrades to fewer slots when the region/auth strikes a family", () => {
 		// Kimi is gw2-only; strike it and Moonshot has nothing left.
 		const slots = router({ unavailable: ["gw2/kimi"] }).resolveMany(
-			{ persona: "deliverable-worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "light" },
 			2,
 		);
 		expect(slots).toHaveLength(1);
@@ -493,7 +496,7 @@ describe("resolveMany (top-N)", () => {
 		// usable review is a review; zero is a silent hole.
 		const slots = router({
 			unavailable: ["gw1/sol", "gw2/sol", "gw2/kimi"],
-		}).resolveMany({ persona: "deliverable-worker", tier: "standard" }, 3);
+		}).resolveMany({ persona: "deliverable-worker", tier: "light" }, 3);
 		expect(slots).toHaveLength(1);
 		expect(slots[0]).toMatchObject({ source: "fallback", modelId: "gw2/seat" });
 		expect(slots[0].fallbackReason).toContain("unavailable");
@@ -501,14 +504,14 @@ describe("resolveMany (top-N)", () => {
 
 	it("keeps the allowance bound — top-N is not an escape hatch", () => {
 		expect(() =>
-			router().resolveMany({ persona: "deliverable-worker", tier: "light" }, 3),
+			router().resolveMany({ persona: "deliverable-worker", tier: "fast" }, 3),
 		).toThrow("outside persona deliverable-worker's allowance");
 	});
 
 	it("carries the same candidate facts on every slot", () => {
 		// Explain output must not degrade just because the caller asked for N.
 		const slots = router().resolveMany(
-			{ persona: "deliverable-worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "light" },
 			2,
 		);
 		for (const slot of slots) expect(slot.candidates).toHaveLength(2);
@@ -529,8 +532,8 @@ describe("spreadFor", () => {
 			router({
 				settings: settingsWith({
 					allowances: {
-						"deliverable-worker": { tiers: ["standard", "heavy"] },
-						"code-review": { tiers: ["standard"], spread: 2 },
+						"deliverable-worker": { tiers: ["light", "frontier"] },
+						"code-review": { tiers: ["light"], spread: 2 },
 					},
 				}),
 			}).spreadFor("code-review"),
@@ -546,8 +549,8 @@ describe("spreadFor", () => {
 			router({
 				settings: settingsWith({
 					allowances: {
-						"deliverable-worker": { tiers: ["standard", "heavy"] },
-						"code-review": { tiers: ["heavy"] },
+						"deliverable-worker": { tiers: ["light", "frontier"] },
+						"code-review": { tiers: ["frontier"] },
 					},
 				}),
 			}).spreadFor("code-review"),
@@ -562,7 +565,7 @@ describe("spreadFor", () => {
 
 	it("rejects a spread above the cap at parse time", () => {
 		const settings = settingsWith({
-			allowances: { "code-review": { tiers: ["heavy"], spread: 99 } },
+			allowances: { "code-review": { tiers: ["frontier"], spread: 99 } },
 		});
 		expect(() => parseModelsSettings({}, settings)).toThrow(
 			"spread: must be an integer 1..5",
@@ -576,7 +579,7 @@ describe("spreadFor", () => {
 		expect(
 			router({
 				settings: settingsWith({
-					allowances: { "code-review": { tiers: ["heavy"], spread: 2.5 } },
+					allowances: { "code-review": { tiers: ["frontier"], spread: 2.5 } },
 				}),
 			}).spreadFor("code-review"),
 		).toBe(3);
@@ -590,12 +593,12 @@ describe("spreadFor", () => {
 // nowhere to go it falls back to inherit WITH a fallbackReason, never silently.
 
 describe("resolveOtherFamily", () => {
-	// A caller on OpenAI (Sol's gw1 attachment) asking through the standard-then-
-	// heavy allowance: standard leads with OpenAI/Sol (same family — skipped),
+	// A caller on OpenAI (Sol's gw1 attachment) asking through the light-then-
+	// frontier allowance: light leads with OpenAI/Sol (same family — skipped),
 	// then Moonshot/Kimi wins deterministically.
 	const OTHER_FAMILY = settingsWith({
 		allowances: {
-			"code-review": { tiers: ["standard", "heavy"], direct: "other-family" },
+			"code-review": { tiers: ["light", "frontier"], direct: "other-family" },
 		},
 	});
 
@@ -608,7 +611,7 @@ describe("resolveOtherFamily", () => {
 			source: "tier",
 			modelId: "gw2/kimi",
 			family: "Moonshot",
-			tier: "standard",
+			tier: "light",
 		});
 	});
 
@@ -620,7 +623,7 @@ describe("resolveOtherFamily", () => {
 	});
 
 	it("walks into the next tier when the first holds only the caller's family", () => {
-		// standard reduced to OpenAI only; heavy holds Anthropic — the walk must
+		// light reduced to OpenAI only; frontier holds Anthropic — the walk must
 		// cross the tier boundary rather than settle for its own family.
 		const resolution = router({
 			settings: {
@@ -629,7 +632,7 @@ describe("resolveOtherFamily", () => {
 					rosters: {
 						daily: {
 							...SETTINGS.models.rosters.daily,
-							standard: ["OpenAI/Sol"],
+							light: ["OpenAI/Sol"],
 						},
 					},
 				},
@@ -642,7 +645,7 @@ describe("resolveOtherFamily", () => {
 			source: "tier",
 			modelId: "gw1/opus",
 			family: "Anthropic",
-			tier: "heavy",
+			tier: "frontier",
 		});
 	});
 
@@ -656,9 +659,9 @@ describe("resolveOtherFamily", () => {
 					...(OTHER_FAMILY as { models: Record<string, unknown> }).models,
 					rosters: {
 						daily: {
-							light: ["OpenAI/Quick"],
-							standard: ["OpenAI/Sol"],
-							heavy: ["OpenAI/Quick"],
+							fast: ["OpenAI/Quick"],
+							light: ["OpenAI/Sol"],
+							frontier: ["OpenAI/Quick"],
 						},
 					},
 				},
@@ -710,12 +713,12 @@ describe("resolveFamily", () => {
 			source: "tier",
 			modelId: "gw2/kimi",
 			family: "Moonshot",
-			tier: "standard",
+			tier: "light",
 		});
 	});
 
 	it("walks into the next tier when the first misses the family", () => {
-		// Anthropic lives in heavy only; standard is walked first and passed by.
+		// Anthropic lives in frontier only; light is walked first and passed by.
 		const resolution = router().resolveFamily({
 			persona: "deliverable-worker",
 			family: "Anthropic",
@@ -724,7 +727,7 @@ describe("resolveFamily", () => {
 			source: "tier",
 			modelId: "gw1/opus",
 			family: "Anthropic",
-			tier: "heavy",
+			tier: "frontier",
 		});
 	});
 
@@ -764,10 +767,20 @@ describe("resolveFamily", () => {
 
 describe("resolveForRole", () => {
 	it("uses the persona's default tier when the caller names none", () => {
+		// The seat is on gw2, so Sol's gw2 attachment jumps the queue.
 		expect(router().resolveForRole("codebase-research")).toMatchObject({
 			source: "tier",
 			tier: "light",
-			modelId: "gw1/quick",
+			modelId: "gw2/sol",
+		});
+	});
+
+	it("resolves the built-in adjudication persona at frontier", () => {
+		expect(router().resolveForRole("adjudication")).toMatchObject({
+			source: "tier",
+			tier: "frontier",
+			modelId: "gw1/opus",
+			family: "Anthropic",
 		});
 	});
 
@@ -775,7 +788,7 @@ describe("resolveForRole", () => {
 		expect(
 			router({
 				settings: settingsWith({
-					allowances: { "code-review": { tiers: ["standard", "heavy"] } },
+					allowances: { "code-review": { tiers: ["light", "frontier"] } },
 				}),
 			}).resolveForRole("code-review", {
 				family: "other",
@@ -793,7 +806,7 @@ describe("resolveForRole", () => {
 	it("treats family: 'same' as no family constraint", () => {
 		expect(
 			router().resolveForRole("deliverable-worker", {
-				tier: "standard",
+				tier: "light",
 				family: "same",
 			}),
 		).toMatchObject({ family: "OpenAI" });
@@ -804,7 +817,7 @@ describe("resolveForRole", () => {
 		// lowest level above it.
 		expect(
 			router().resolveForRole("deliverable-worker", {
-				tier: "standard",
+				tier: "light",
 				effort: "minimal",
 			})?.effort,
 		).toBe("high");
@@ -816,7 +829,7 @@ describe("resolveForRole", () => {
 		).toBeNull();
 		expect(
 			router({ settings: {} }).resolveForRole("code-review", {
-				tier: "heavy",
+				tier: "frontier",
 			}),
 		).toBeNull();
 	});

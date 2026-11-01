@@ -1,5 +1,5 @@
 // The v2 configuration parser: families (ranked; each holds free-text aliases with ordered
-// per-provider attachments), rosters (light/standard/heavy tiers holding ordered
+// per-provider attachments), rosters (fast/light/normal/frontier tiers holding ordered
 // alias refs), bindings (seat→roster bindings), region (the active model
 // allowlist), and per-persona tier allowances. Mirrors the old conventions:
 // null entries are deletion markers (skipped), invalid non-null shapes throw

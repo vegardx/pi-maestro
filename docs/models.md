@@ -63,6 +63,15 @@ For a requested tier:
 5. Apply the active region list and authentication availability.
 6. If no tier candidate is available, visibly fall back to the seat model.
 
+Effort precedence is explicit request > alias `effort` > inherited seat level,
+each clamped to the alias `efforts` ∩ the model's supported levels (nearest
+below, else lowest above); an alias with `effort` and no `efforts` is a pin that
+answers its own level and records the refused request in `fallbackReason`.
+
+`family: "other"` (and a named family) walks only the requested tier — with no
+tier, the persona's allowance in order — and a tier with no available foreign
+family inherits the seat with a `fallbackReason` naming that tier.
+
 This is why the Luna alias can contain both:
 
 ```json
@@ -108,21 +117,21 @@ process (`workflow-routing-provider.ts`), with the id `pi-maestro`:
 
 - `resolve(role)` builds the router from the live session on every call and asks
   `resolveForRole(persona, {tier, effort, family})`, with the session's own model
-  and thinking level as the caller it inherits from. A role naming no effort
-  prefers the seat's thinking level, clamped to the alias and the model. The
-  answer's thinking level is clamped once more to the levels Pi runs the
-  resolved model at, so the fence below admits it. A role the router cannot
-  answer — a tier outside the persona's allowance, no roster configured — is
-  refused with a `ModelRoutingError`. The answer carries the tier the router
-  actually reached, the family, the alias and any `fallbackReason`, cut to
-  pi-workflow's bounds (128 characters; 1024 for the reason).
+  and thinking level as the caller it inherits from. A role's effort beats the
+  alias default; a role naming none takes the alias default, else the seat's
+  thinking level, clamped to the alias and the model. The answer's thinking
+  level is clamped once more to the levels Pi runs the resolved model at, so the
+  fence below admits it. A role the router cannot answer — a tier outside the
+  persona's allowance, no roster configured — is refused with a
+  `ModelRoutingError`. The answer carries the tier, the family, the alias and
+  any `fallbackReason`, cut to pi-workflow's bounds (128 characters; 1024 for
+  the reason).
 - `authorized(model)` is `isAuthorized`: still registered, authenticated and in
   region. A replay that lost the model fails its task by name.
 
-`family: "other"` walks the persona's whole allowance for a family other than the
-seat's, so it may reach a different tier than the one asked; the evidence
-records the tier reached. With nowhere to go it inherits the seat, with a
-`fallbackReason`.
+`family: "other"` walks only the tier asked for a family other than the seat's.
+With nowhere to go in that tier it inherits the seat, with a `fallbackReason`
+naming the tier.
 
 ## The host fence
 
@@ -157,8 +166,11 @@ give:
 - the seat model attached to an alias of a configured family, or `family:
   "other"` has nothing to differ from and every diverse lens and the adjudicator
   inherit the seat with a `fallbackReason`;
-- a `frontier` alias (or, failing that, a `normal` one) of a family other than
-  the seat's, so the adjudicator is not the implementer's family;
+- a `frontier` alias of a family other than the seat's, so the adjudicator is
+  not the implementer's family (it is not looked for in `normal`);
+- a `normal` alias of a family other than the seat's (and a `light` one when a
+  lens is authored `light` and diverse), so a diverse lens finds one at its own
+  tier;
 - the built-in allowances, or overrides that keep `code-review` ⊇ `light`,
   `normal`, `adjudication` ∋ `frontier` and `codebase-research` ∋ `light`;
 - a region, when one is active, that admits the seat model — or the fence

@@ -71,6 +71,7 @@ import {
 	type WorkflowEventBus,
 	type WorkflowReadClient,
 } from "./workflow-provider.js";
+import { registerModelRoutingFor } from "./workflow-routing-provider.js";
 
 /**
  * Re-exported because the `/mode` handler is the hook's only caller and this
@@ -945,7 +946,9 @@ export default defineExtension(
 				);
 			});
 		// THE SEAT'S ROUTING, built from the live context inside every call and
-		// never at registration, for the session model's reason.
+		// never at registration, for the session model's reason. Both providers
+		// below read it, so the model pi-subagent admits and the model pi-workflow
+		// is routed to are answered by one router over one session.
 		const routing = () => {
 			const ctx = live ?? started;
 			return ctx ? seatRoutingFor(ctx) : undefined;
@@ -959,6 +962,18 @@ export default defineExtension(
 			pi.on("session_start", (_event, ctx) => {
 				ctx.ui.notify(
 					`The seat's model fence was not registered with the subagent runtime: ${admission.problem}. Every builtin workflow task is refused at preflight unless whatever else registered a provider admits its model.`,
+					"warning",
+				);
+			});
+		// THE SEAT'S ROUTER, REGISTERED ONCE. `plan-to-ship` declares
+		// `needs.modelRouting`: review lenses, normalize, the receipt and the
+		// adjudicator name a tier, never a model, and pi-workflow refuses the start
+		// on a host with no router.
+		const router = registerModelRoutingFor(pi.events, routing);
+		if ("problem" in router)
+			pi.on("session_start", (_event, ctx) => {
+				ctx.ui.notify(
+					`The seat's model router was not registered with the workflow runtime: ${router.problem}. A run started from this seat routes its reviewers and its adjudicator through whatever else registered one.`,
 					"warning",
 				);
 			});

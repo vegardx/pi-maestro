@@ -223,18 +223,34 @@ describe("REQUIRED_WORKFLOW_CONTRACT against pi-workflow's shipped contract", ()
 		expect(isCompatibleWorkflowContract(without)).toBe(false);
 	});
 
+	// Revision 27. `plan-to-ship` declares `needs.modelRouting`, so a runtime that
+	// cannot ask this seat's router refuses every plan at start; required rather
+	// than degraded around, and refused by name rather than by the shape check.
+	it("requires `modelRoutingProvider`, because every plan routes by tier", () => {
+		expect(REQUIRED_WORKFLOW_FEATURES).toContain("modelRoutingProvider");
+		expect(shipped.features.modelRoutingProvider).toBe(true);
+
+		const without = structuredClone(shipped);
+		delete without.features.modelRoutingProvider;
+		const why = workflowContractMismatch(without);
+		expect(why).toContain("modelRoutingProvider");
+		expect(why).not.toMatch(/not a pi-workflow/);
+		expect(isCompatibleWorkflowContract(without)).toBe(false);
+	});
+
 	// The fixture is pi-workflow's own constant, so this is the cross-repo pin: the
 	// revision this seat was written against, and the pi-subagent revision that
 	// runtime needs, both read off the copy rather than restated. The seat's own
 	// plan-check gate must name the same pi-subagent revision, or one installed
 	// pi-subagent could never satisfy both the seat and the workflow runtime.
-	it("is pinned to revision 26, over pi-subagent revision 12", () => {
-		expect(shipped.contractRevision).toBe(26);
-		expect(shipped.requiredSubagent.contractRevision).toBe(12);
+	it("is pinned to revision 27, over pi-subagent revision 13", () => {
+		expect(shipped.contractRevision).toBe(27);
+		expect(shipped.requiredSubagent.contractRevision).toBe(13);
 		expect(shipped.requiredSubagent.contractRevision).toBe(
 			REQUIRED_SUBAGENT_CONTRACT_REVISION,
 		);
 		expect(shipped.requiredSubagent.features.sessionModelInherit).toBe(true);
+		expect(shipped.requiredSubagent.features.hostModelAdmission).toBe(true);
 	});
 });
 

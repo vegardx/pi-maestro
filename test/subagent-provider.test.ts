@@ -325,6 +325,11 @@ describe("the pi-subagent this seat was built against", () => {
 		);
 	});
 
+	it("requires host model admission, the fence every builtin template uses", () => {
+		expect(REQUIRED_SUBAGENT_FEATURES).toContain("hostModelAdmission");
+		expect(SUBAGENT_RUNTIME_CONTRACT.features.hostModelAdmission).toBe(true);
+	});
+
 	it("names a feature the check needs and the runtime does not offer", () => {
 		for (const feature of REQUIRED_SUBAGENT_FEATURES)
 			expect(

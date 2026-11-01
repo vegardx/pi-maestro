@@ -12,7 +12,7 @@
  * bounded on purpose:
  *
  *   1. The literal below names **only** what pi-maestro actually needs — one
- *      revision and nine feature keys — not all of them, so an unrelated
+ *      revision and ten feature keys — not all of them, so an unrelated
  *      feature flip is not pi-maestro's business.
  *   2. `test/workflow-provider.test.ts` compares the literal against a
  *      checked-in copy of pi-workflow's own shipped constant
@@ -39,7 +39,7 @@ import { Value } from "typebox/value";
  * Bumping it is a deliberate act: re-read pi-workflow's contract, refresh the
  * fixture, and check that the features below still mean what they meant.
  */
-export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 26;
+export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 27;
 
 /**
  * The features the hand-off and `/plan run` actually depend on.
@@ -63,6 +63,10 @@ export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 26;
  *   inputs are what `checkpoints` returns. A runtime without it leaves every one
  *   of them with nothing to do — so it is required rather than degraded around,
  *   which is the opposite of the judgement made while it did not exist.
+ * - `modelRoutingProvider` — revision 27. Review lenses, normalize, the receipt
+ *   and adjudication ask for a tier rather than a model, and `plan-to-ship`
+ *   declares `needs.modelRouting`: a runtime that cannot ask this seat's router
+ *   would refuse every plan at start, by name.
  */
 export const REQUIRED_WORKFLOW_FEATURES = Object.freeze([
 	"staticWorkflows",
@@ -74,6 +78,7 @@ export const REQUIRED_WORKFLOW_FEATURES = Object.freeze([
 	"worktrees",
 	"serviceProviderStart",
 	"serviceProviderDecide",
+	"modelRoutingProvider",
 ] as const);
 
 export type RequiredWorkflowFeature =
@@ -103,6 +108,7 @@ export const REQUIRED_WORKFLOW_CONTRACT: RequiredWorkflowContract =
 			worktrees: true,
 			serviceProviderStart: true,
 			serviceProviderDecide: true,
+			modelRoutingProvider: true,
 		}),
 	});
 
@@ -115,9 +121,10 @@ export const REQUIRED_WORKFLOW_CONTRACT: RequiredWorkflowContract =
  * is not pi-maestro's refusal to make — but a contract that has no
  * `requiredSubagent` at all is not this contract, so the shape is checked.
  *
- * `serviceProviderStart` and `serviceProviderDecide` are deliberately NOT named
- * here, although `REQUIRED_WORKFLOW_FEATURES` requires both. A pi-workflow that
- * predates `startBuiltin`, or one that predates `decide` on the read client, is
+ * `serviceProviderStart`, `serviceProviderDecide` and `modelRoutingProvider` are
+ * deliberately NOT named here, although `REQUIRED_WORKFLOW_FEATURES` requires
+ * them. A pi-workflow that predates `startBuiltin`, `decide` on the read client,
+ * or the routing provider, is
  * still recognisably a workflow runtime contract, and it should be refused by
  * `workflowContractMismatch` — which names the feature and the value this seat
  * needs — rather than by the shape check, whose only answer is "that is not a

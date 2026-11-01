@@ -1,9 +1,9 @@
 {
 	"schema": "pi-workflow-runtime",
-	"contractRevision": 26,
+	"contractRevision": 27,
 	"requiredSubagent": {
 		"schema": "pi-subagent-runtime",
-		"contractRevision": 12,
+		"contractRevision": 13,
 		"features": {
 			"nativeSessionBackend": true,
 			"gondolinSandbox": true,
@@ -33,7 +33,8 @@
 			"sessionModelInherit": true,
 			"workspaceStartAt": true,
 			"resumeAtHandoff": true,
-			"capacityWait": true
+			"capacityWait": true,
+			"hostModelAdmission": true
 		}
 	},
 	"features": {
@@ -59,6 +60,7 @@
 		"operatorAttempts": true,
 		"checkpoints": true,
 		"serviceProviderStart": true,
-		"serviceProviderDecide": true
+		"serviceProviderDecide": true,
+		"modelRoutingProvider": true
 	}
 }

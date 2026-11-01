@@ -13,7 +13,10 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveModelForRole } from "@vegardx/pi-maestro/model-router";
+import {
+	resolveModelForRole,
+	seatRoutingFor,
+} from "@vegardx/pi-maestro/model-router";
 import {
 	loadedSkillNames,
 	planHostPort,
@@ -117,6 +120,29 @@ describe("resolveModelForRole", () => {
 				personaForRole(role),
 			);
 		}
+	});
+});
+
+describe("seatRoutingFor", () => {
+	// The admission and routing providers inherit from the seat pi-subagent was
+	// told about, so the thinking level is read off the field the session-model
+	// provider reads.
+	it("reads the session's model and thinking level off the live context", () => {
+		const routing = seatRoutingFor({
+			...fakeCtx(),
+			thinkingLevel: "high",
+		} as ExtensionContext);
+		expect(routing.seat).toEqual({ modelId: SEAT, effort: "high" });
+		expect(routing.router.isAuthorized(WORKER)).toBe(true);
+		expect(routing.catalog.findModel("openai", "sol")).toBeDefined();
+	});
+
+	it("routes through the context's own models settings", () => {
+		const resolution = seatRoutingFor(fakeCtx()).router.resolveForRole(
+			"codebase-research",
+			{ tier: "light" },
+		);
+		expect(resolution?.modelId).toBe(WORKER);
 	});
 });
 

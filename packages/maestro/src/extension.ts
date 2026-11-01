@@ -29,6 +29,7 @@ import {
 	type ModeExitHook,
 } from "./exit-flow.js";
 import { MODE_NAMES, type Mode, type ModeName, modeCeiling } from "./mode.js";
+import { seatRoutingFor } from "./model-router.js";
 import {
 	createRunNarrator,
 	type Narration,
@@ -60,6 +61,7 @@ import { createSeat, type Seat } from "./seat.js";
 import {
 	createSubagentPlanCheck,
 	registerModeCeiling,
+	registerModelAdmissionFor,
 	registerSessionModelFor,
 } from "./subagent-provider.js";
 import {
@@ -939,6 +941,24 @@ export default defineExtension(
 			pi.on("session_start", (_event, ctx) => {
 				ctx.ui.notify(
 					`The session's model was not registered with the subagent runtime: ${model.problem}. \`${PLAN_WORKFLOW_REF}\` inherits the session model, so a run started from this seat will be refused until whatever else registered a provider is unloaded — and a delegation that asks to inherit resolves through that provider instead.`,
+					"warning",
+				);
+			});
+		// THE SEAT'S ROUTING, built from the live context inside every call and
+		// never at registration, for the session model's reason.
+		const routing = () => {
+			const ctx = live ?? started;
+			return ctx ? seatRoutingFor(ctx) : undefined;
+		};
+		// THE HOST'S MODEL FENCE, REGISTERED ONCE. Every builtin pi-workflow
+		// template lists `host` in `allowedModels` and names no model of its own,
+		// so this provider decides what a workflow task may run on — the session's
+		// own model included, which planners and implementers inherit.
+		const admission = registerModelAdmissionFor(pi.events, routing);
+		if ("problem" in admission)
+			pi.on("session_start", (_event, ctx) => {
+				ctx.ui.notify(
+					`The seat's model fence was not registered with the subagent runtime: ${admission.problem}. Every builtin workflow task is refused at preflight unless whatever else registered a provider admits its model.`,
 					"warning",
 				);
 			});

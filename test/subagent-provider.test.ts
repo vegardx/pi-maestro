@@ -15,6 +15,11 @@ import {
 	registerDelegationCeilingProvider,
 	resolveDelegationCeiling,
 } from "@vegardx/pi-subagent/ceiling-provider";
+import {
+	ModelAdmissionProviderError,
+	registerModelAdmissionProvider,
+	resolveModelAdmission,
+} from "@vegardx/pi-subagent/model-admission-provider";
 import { registerSubagentServiceProvider } from "@vegardx/pi-subagent/service-provider";
 import {
 	registerSessionModelProvider,
@@ -31,6 +36,7 @@ import {
 } from "../packages/maestro/src/plan-check.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
 import {
+	admitsModel,
 	createSubagentPlanCheck,
 	maestroAgentsDir,
 	PLAN_CHECK_CEILING,
@@ -43,6 +49,7 @@ import {
 	REQUIRED_SUBAGENT_CONTRACT_REVISION,
 	REQUIRED_SUBAGENT_FEATURES,
 	registerModeCeiling,
+	registerModelAdmissionFor,
 	registerSessionModelFor,
 	sessionModelAnswer,
 	subagentContractMismatch,
@@ -52,6 +59,16 @@ import {
 	UNAVAILABLE_UNREADABLE,
 	unavailableTimeout,
 } from "../packages/maestro/src/subagent-provider.js";
+import {
+	exact,
+	FLAT,
+	fakeRouting,
+	LIGHT,
+	LOOSE,
+	MAX_ONLY,
+	OTHER_FRONTIER,
+	SEAT,
+} from "./fake-routing.js";
 
 const DESCRIPTION =
 	"We are shipping the component catalogue so that every workflow stops" +
@@ -660,5 +677,120 @@ describe("what a delegation inherits when it asks to", () => {
 			workspaceModes: ["read-only", "worktree"],
 		});
 		expect(resolveSessionModel(bus)?.id).toBe("opus-5");
+	});
+});
+
+// ── The host's model fence ───────────────────────────────────────────────────
+//
+// Every builtin pi-workflow template lists `host` and names no model, and
+// pi-workflow sends the session's own model as an exact model to every planner
+// and implementer. So the fence is two questions to the router — would it hand
+// this model out at all, and does Pi run it at this thinking level — and the
+// session's own model passes it by construction.
+
+describe("the host model fence", () => {
+	it("admits the session's own model at the session's thinking level", () => {
+		const routing = fakeRouting({ effort: "high" });
+		expect(admitsModel(routing, exact(SEAT, "high"))).toBe(true);
+	});
+
+	it("admits a registered, authenticated model no roster names", () => {
+		expect(admitsModel(fakeRouting(), exact(LOOSE, "medium"))).toBe(true);
+	});
+
+	it("refuses a model the registry does not have", () => {
+		expect(
+			admitsModel(fakeRouting(), exact("anthropic/nowhere", "medium")),
+		).toBe(false);
+	});
+
+	it("refuses a model whose provider has no credentials", () => {
+		const routing = fakeRouting({ authenticated: ["anthropic"] });
+		expect(admitsModel(routing, exact(OTHER_FRONTIER, "high"))).toBe(false);
+		expect(admitsModel(routing, exact(LIGHT, "low"))).toBe(true);
+	});
+
+	it("refuses a model outside the active region", () => {
+		const routing = fakeRouting({
+			models: {
+				region: { active: "eu", lists: { eu: ["anthropic/*"] } },
+			},
+		});
+		expect(admitsModel(routing, exact(SEAT, "medium"))).toBe(true);
+		expect(admitsModel(routing, exact(LOOSE, "medium"))).toBe(false);
+	});
+
+	it("admits only `off` for a model that does no reasoning", () => {
+		expect(admitsModel(fakeRouting(), exact(FLAT, "off"))).toBe(true);
+		expect(admitsModel(fakeRouting(), exact(FLAT, "low"))).toBe(false);
+	});
+
+	it("refuses `xhigh` on a model whose level map names neither top rung", () => {
+		expect(admitsModel(fakeRouting(), exact(LIGHT, "high"))).toBe(true);
+		expect(admitsModel(fakeRouting(), exact(LIGHT, "xhigh"))).toBe(false);
+	});
+
+	// pi-subagent's ladder has no `max`: a seat at `max` reaches the fence as
+	// `xhigh`, and a model that maps only `max` must still run its own session.
+	it("admits `xhigh` on a model whose level map names only `max`", () => {
+		expect(admitsModel(fakeRouting(), exact(MAX_ONLY, "xhigh"))).toBe(true);
+	});
+
+	it("refuses everything with no live session", () => {
+		expect(admitsModel(undefined, exact(SEAT, "medium"))).toBe(false);
+	});
+
+	it("answers pi-subagent through the registered provider, live on every call", () => {
+		const bus = fakeBus();
+		let routing = fakeRouting();
+		const registered = registerModelAdmissionFor(bus, () => routing);
+		expect("release" in registered).toBe(true);
+		expect(resolveModelAdmission(bus, exact(OTHER_FRONTIER, "high"))).toBe(
+			true,
+		);
+		routing = fakeRouting({ authenticated: ["anthropic"] });
+		expect(resolveModelAdmission(bus, exact(OTHER_FRONTIER, "high"))).toBe(
+			false,
+		);
+		if ("release" in registered) registered.release();
+		expect(
+			resolveModelAdmission(bus, exact(OTHER_FRONTIER, "high")),
+		).toBeUndefined();
+	});
+
+	it("refuses, never admits, when the live session throws", () => {
+		const bus = fakeBus();
+		registerModelAdmissionFor(bus, () => {
+			throw new Error("this session has been replaced");
+		});
+		expect(resolveModelAdmission(bus, exact(SEAT, "medium"))).toBe(false);
+	});
+
+	it("reports pi-subagent's own duplicate refusal rather than throwing", () => {
+		const bus = fakeBus();
+		registerModelAdmissionProvider(bus, () => true);
+		expect(registerModelAdmissionFor(bus, () => undefined)).toEqual({
+			problem: new ModelAdmissionProviderError(
+				"duplicate",
+				"A pi-subagent model admission provider is already registered.",
+			).message,
+		});
+	});
+
+	it("registers beside the ceiling and the session model", () => {
+		const bus = fakeBus();
+		const ceiling = registerModeCeiling(bus, () => "ask");
+		const model = registerSessionModelFor(bus, () => ({
+			model: { provider: "anthropic", id: "opus" },
+			thinkingLevel: "high",
+		}));
+		const admission = registerModelAdmissionFor(bus, () => fakeRouting());
+		expect("release" in ceiling).toBe(true);
+		expect("release" in model).toBe(true);
+		expect("release" in admission).toBe(true);
+		// The model the seat says it runs is a model the seat admits.
+		const session = resolveSessionModel(bus);
+		expect(session).toEqual(exact(SEAT, "high"));
+		expect(resolveModelAdmission(bus, session as never)).toBe(true);
 	});
 });

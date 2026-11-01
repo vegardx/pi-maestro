@@ -21,6 +21,7 @@ import {
 import {
 	type CatalogModel,
 	createModelRouter,
+	type InheritedModel,
 	type ModelCatalogPort,
 	type ModelResolution,
 	type ModelRole,
@@ -29,6 +30,7 @@ import {
 	parseModelSpec,
 	parseModelsSettings,
 	personaForRole,
+	THINKING_LEVELS,
 	type ThinkingLevel,
 	type TierId,
 } from "@vegardx/pi-models";
@@ -99,6 +101,45 @@ export function modelRouterFor(ctx: ExtensionContext): ModelRouter {
 		},
 		modelCatalogPort(ctx),
 	);
+}
+
+/**
+ * What the two bus providers — pi-subagent's model admission and pi-workflow's
+ * model routing — ask about the seat, read from ONE live context.
+ *
+ * A port rather than the context itself so a test can answer it with a real
+ * router over a fixture catalogue, and so both providers read the router, the
+ * catalogue and the seat from the same place: two providers that disagreed
+ * about which model the seat runs would admit one model and route another.
+ */
+export interface SeatRouting {
+	readonly router: Pick<ModelRouter, "isAuthorized" | "resolveForRole">;
+	readonly catalog: Pick<ModelCatalogPort, "findModel">;
+	/** The session's own model and thinking level, when it has one. */
+	readonly seat?: InheritedModel;
+}
+
+/**
+ * The seat's routing, built from the live context on every call.
+ *
+ * Built per call and never cached: `/model`, the thinking dial and the
+ * `models` settings all move under a running session, and an answer captured at
+ * registration would admit or route by a configuration nobody is in any more.
+ * The thinking level is read off `ctx.thinkingLevel`, the field
+ * `sessionModelAnswer` reads, so the seat the router inherits from is the seat
+ * pi-subagent was told about.
+ */
+export function seatRoutingFor(ctx: ExtensionContext): SeatRouting {
+	const modelId = sessionModelId(ctx);
+	const level = ctx.thinkingLevel;
+	const effort = (THINKING_LEVELS as readonly unknown[]).includes(level)
+		? (level as ThinkingLevel)
+		: undefined;
+	return {
+		router: modelRouterFor(ctx),
+		catalog: modelCatalogPort(ctx),
+		...(modelId ? { seat: { modelId, ...(effort ? { effort } : {}) } } : {}),
+	};
 }
 
 export interface ResolvedModelAuth {

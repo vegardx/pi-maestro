@@ -43,12 +43,14 @@ import type {
 	EventBus,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { supportedEfforts } from "@vegardx/pi-models";
 import {
 	CONTRACT_REVISION,
 	SUBAGENT_RUNTIME_CONTRACT,
 	type SubagentRuntimeContract,
 } from "@vegardx/pi-subagent";
 import { registerDelegationCeilingProvider } from "@vegardx/pi-subagent/ceiling-provider";
+import { registerModelAdmissionProvider } from "@vegardx/pi-subagent/model-admission-provider";
 import {
 	acquireSubagentService,
 	SubagentServiceProviderError,
@@ -56,6 +58,7 @@ import {
 import { registerSessionModelProvider } from "@vegardx/pi-subagent/session-model-provider";
 import type { DelegationCeiling, ModeName, WorkspaceMode } from "./mode.js";
 import { modeCeiling } from "./mode.js";
+import type { SeatRouting } from "./model-router.js";
 import type { Plan } from "./plan.js";
 import {
 	type PlanCheck,
@@ -68,7 +71,7 @@ import { planDigest } from "./plan-input.js";
 
 // ── What crosses the boundary, declared here ─────────────────────────────────
 //
-// pi-subagent publishes four entries and `launch-contracts` is not one of them,
+// pi-subagent's published entries do not include `launch-contracts`,
 // so `SubagentRequest`, `DelegationCeiling`, `SubagentService` and
 // `SubagentClient` are NOT importable types. They are declared below, narrowed
 // to exactly what this file builds and calls — the same bargain
@@ -630,10 +633,92 @@ export function registerSessionModelFor(
 	}
 }
 
+// ── The host's model fence, registered once ─────────────────────────────────
+
+/**
+ * Whether this seat stands behind one exact model a launch asks to run on.
+ *
+ * TWO QUESTIONS, BOTH THE ROUTER'S OWN. The model must be one the router would
+ * hand out at all — registered, authenticated and inside the active region,
+ * which is `isAuthorized`, the same question a replay asks of a stored
+ * resolution — and the thinking level must be one Pi would run that model at,
+ * which is `supportedEfforts` (`off` alone for a model that does no
+ * reasoning). Nothing here consults a roster or a tier: a fence that admitted
+ * only roster entries would refuse the session's own model, which every
+ * planner and implementer inherits and which pi-workflow sends as an exact
+ * model.
+ *
+ * `xhigh` IS ALSO ADMITTED WHERE THE MODEL MAPS ONLY `max`. pi-subagent's
+ * ladder has no `max`, so a seat at `max` reaches this fence as `xhigh` — the
+ * session-model provider above maps it that way, and so does pi-workflow. A
+ * model whose level map names `max` and not `xhigh` would otherwise refuse the
+ * session it is running.
+ */
+export function admitsModel(
+	routing: SeatRouting | undefined,
+	model: SessionModelAnswer,
+): boolean {
+	if (!routing) return false;
+	if (!routing.router.isAuthorized(`${model.provider}/${model.id}`))
+		return false;
+	const catalog = routing.catalog.findModel(model.provider, model.id);
+	if (!catalog) return false;
+	const supported = supportedEfforts(catalog);
+	return (
+		supported.includes(model.thinking) ||
+		(model.thinking === "xhigh" && supported.includes("max"))
+	);
+}
+
+/**
+ * `registerModelAdmissionProvider`, re-typed against this package's
+ * pi-coding-agent, for the same reason the ceiling provider is.
+ */
+const registerModelAdmission = registerModelAdmissionProvider as unknown as (
+	events: EventBus,
+	provider: (model: SessionModelAnswer) => boolean,
+) => () => void;
+
+/**
+ * Answer, for every launch whose definition admits `host`, whether this seat
+ * stands behind the exact model it asks for.
+ *
+ * Every builtin pi-workflow template names no model and lists `host`, so this
+ * provider IS the fence over what a workflow task may run on. ONE PROVIDER,
+ * READ ON EVERY CALL, for the session-model provider's reason: the router is
+ * built from the live context inside the call, so a `/model` switch or a
+ * settings edit is the fence the next preflight meets. Anything that throws —
+ * a replaced session's context, an unreadable registry — is a refusal, never
+ * an admission: a fence that opened when it could not look is not one.
+ * pi-subagent refuses a second registration by name, and that refusal is
+ * returned rather than thrown.
+ */
+export function registerModelAdmissionFor(
+	events: EventBus,
+	live: () => SeatRouting | undefined,
+): { readonly release: () => void } | { readonly problem: string } {
+	try {
+		const release = registerModelAdmission(events, (model) => {
+			try {
+				return admitsModel(live(), model);
+			} catch {
+				return false;
+			}
+		});
+		return { release };
+	} catch (error) {
+		return {
+			problem:
+				providerRegistrationRefusal(error, "ModelAdmissionProviderError") ??
+				"the model admission provider could not be registered with the subagent runtime",
+		};
+	}
+}
+
 /**
  * pi-subagent's own registration refusal, recognised by name.
  *
- * ONE FUNCTION FOR BOTH PROVIDERS, taking the error name it expects: the two
+ * ONE FUNCTION FOR EVERY PROVIDER, taking the error name it expects: the
  * registrations refuse for the same reason — somebody else got there first — and
  * pi-subagent names each with its own class. A message passed through unchanged is
  * better than one this file could write, and it is only passed through when the

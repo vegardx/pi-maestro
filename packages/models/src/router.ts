@@ -569,14 +569,28 @@ export function createModelRouter(
 	}
 
 	/**
+	 * The tiers a family walk visits: ONLY the requested tier when one was
+	 * named — a `normal` lens is never quietly answered from `light` — else the
+	 * persona allowance's tiers in order. No cross-tier cascade.
+	 */
+	function familyWalkTiers(request: ModelResolutionRequest): readonly TierId[] {
+		if (request.tier) return [request.tier];
+		return models?.allowances[request.persona]?.tiers ?? [];
+	}
+
+	/**
 	 * `family: "other"` — a reviewer never marks its own homework. Walks the
-	 * persona allowance's tiers IN ORDER through the bound roster and takes the
-	 * first available entry whose family differs from the caller's.
-	 * Deterministic: allowance order × roster order, nothing ranked at runtime.
+	 * requested tier, or with none the persona allowance's tiers IN ORDER,
+	 * through the bound roster and takes the first available entry whose family
+	 * differs from the caller's. Deterministic: tier order × roster order,
+	 * nothing ranked at runtime. A requested tier is a deliberate tier reference,
+	 * so one outside the allowance (or with no roster to walk) is refused exactly
+	 * as `resolve` refuses it.
 	 *
 	 * Nowhere to go — the caller's family is unknown (no caller model, or a model
-	 * attached to no alias), the roster holds no foreign family, or every foreign
-	 * entry is struck — falls back to plain inheritance WITH a fallbackReason.
+	 * attached to no alias), the walked tiers hold no foreign family, or every
+	 * foreign entry is struck — falls back to plain inheritance WITH a
+	 * fallbackReason naming the tiers walked.
 	 * Falling back to a tier pick instead could still land on the caller's own
 	 * family, which is precisely the outcome this selector rules out.
 	 */
@@ -595,12 +609,13 @@ export function createModelRouter(
 				request,
 				`other-family requested but ${callerModel} belongs to no configured family — nothing to differ from`,
 			);
-		const tiers = models?.allowances[request.persona]?.tiers ?? [];
+		const tiers = familyWalkTiers(request);
 		for (const tier of tiers) {
 			let walk: TierWalk;
 			try {
 				walk = walkTier(request, tier);
-			} catch {
+			} catch (error) {
+				if (request.tier) throw error;
 				// No binding/roster to walk — this tier offers nowhere to go; the
 				// degradation is reported once, below, rather than thrown per tier.
 				continue;
@@ -612,14 +627,18 @@ export function createModelRouter(
 		}
 		return inheritResolution(
 			request,
-			`no model outside family ${callerFamily} is available in persona ${request.persona}'s tiers (${tiers.join(", ") || "none"})`,
+			request.tier
+				? `no model outside family ${callerFamily} is available in tier ${request.tier} for persona ${request.persona}`
+				: `no model outside family ${callerFamily} is available in persona ${request.persona}'s tiers (${tiers.join(", ") || "none"})`,
 		);
 	}
 
 	/**
 	 * Resolve a NAMED family through the caller's binding and roster: walk the
-	 * persona allowance's tiers in order and take the first available entry
-	 * belonging to that family. This is the `family` parameter on the subagent
+	 * requested tier, or with none the persona allowance's tiers in order, and
+	 * take the first available entry belonging to that family — the same tier
+	 * rule as `other-family`, so a named-family member asked at `normal` is
+	 * never answered from `light`. This is the `family` parameter on the subagent
 	 * tool — how a fan-out lead starts one member per family the spread named.
 	 *
 	 * The lookup IS the guard. An unknown or unavailable family throws, naming
@@ -635,13 +654,13 @@ export function createModelRouter(
 			throw new ModelResolutionError(
 				`family ${request.family} requested but no v2 roster is configured`,
 			);
-		const tiers = models.allowances[request.persona]?.tiers ?? [];
 		const reachable = new Set<string>();
-		for (const tier of tiers) {
+		for (const tier of familyWalkTiers(request)) {
 			let walk: TierWalk;
 			try {
 				walk = walkTier(request, tier);
-			} catch {
+			} catch (error) {
+				if (request.tier) throw error;
 				// No binding or roster to walk — this tier reaches nothing; the
 				// refusal below reports the whole picture rather than throwing per tier.
 				continue;
@@ -654,7 +673,7 @@ export function createModelRouter(
 			if (winner) return tierResolution(request, tier, walk, winner);
 		}
 		throw new ModelResolutionError(
-			`no available model in family ${request.family} for persona ${request.persona} — ` +
+			`no available model in family ${request.family} ${request.tier ? `at tier ${request.tier} ` : ""}for persona ${request.persona} — ` +
 				`the bound roster reaches: ${[...reachable].join(", ") || "none"}`,
 		);
 	}
@@ -676,16 +695,19 @@ export function createModelRouter(
 	): ModelResolution | null {
 		const tier = request.tier ?? defaultTierFor(role);
 		const inherit = request.inherit ?? (seat ? { modelId: seat } : undefined);
-		const base: ModelResolutionRequest = {
+		const shared: ModelResolutionRequest = {
 			persona: role,
-			...(tier ? { tier } : {}),
 			...(request.effort ? { effort: request.effort } : {}),
 			...(inherit ? { inherit } : {}),
 		};
+		const base = tier ? { ...shared, tier } : shared;
+		// The family walks take only the tier the caller named: a defaulted tier
+		// would narrow a walk that, unasked, spans the persona's allowance.
+		const family = request.tier ? { ...shared, tier: request.tier } : shared;
 		try {
-			if (request.family === "other") return resolveOtherFamily(base);
+			if (request.family === "other") return resolveOtherFamily(family);
 			if (request.family !== undefined && request.family !== "same")
-				return resolveFamily({ ...base, family: request.family });
+				return resolveFamily({ ...family, family: request.family });
 			return resolve(base);
 		} catch {
 			// Fail-visible belongs to `resolve`, which callers may use directly.

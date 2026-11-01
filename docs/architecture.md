@@ -117,7 +117,7 @@ thing a failure here costs. None of them throws into the session.
 ## The subagent seam
 
 `@vegardx/pi-subagent` is an **exact peer pin**, not an optional one, and
-`subagent-provider.ts` is the one file that touches it. Three things go through
+`subagent-provider.ts` is the one file that touches it. Four things go through
 it:
 
 - **The plan check** is one delegated attempt — compiled, launched, awaited, and
@@ -144,10 +144,26 @@ it:
   for its own `subagent` tool and pi-workflow consults it for `workflow_run`, so
   the mode bounds every delegated launch without either of them knowing what a
   pi-maestro mode is.
+- **The host fence** is registered once, for the process, through pi-subagent's
+  own `registerModelAdmissionProvider`. Every builtin pi-workflow template lists
+  `host` in `allowedModels` and names no model, so this provider decides which
+  exact models a workflow task may run on: those the router would hand out
+  (`isAuthorized`: registered, authenticated, in region) at a thinking level Pi
+  runs them at. The router is built from the live session inside every call. See
+  [models](models.md#the-host-fence).
+
+**The model router reaches pi-workflow the same way, without a dependency.**
+`workflow-routing-provider.ts` registers the seat's router on pi-workflow's
+model-routing channel, mirroring the request and the port structurally, so the
+reviewers, the normalize call, the receipt and the adjudicator — which name a
+tier, never a model — are routed by this seat's `models` settings. Its channel,
+schema literal, tier and thinking vocabularies and evidence bounds are pinned in
+`test/workflow-routing-provider.test.ts` against pi-workflow 8.0.0's values. See
+[models](models.md#the-routing-provider).
 
 The types pi-subagent does not export — the launch request, the service and the
 client — are declared locally, narrowed to what this seat builds and calls, and
-its two functions are re-typed once against this package's own copy of
+its registration functions are re-typed once against this package's own copy of
 pi-coding-agent. Every failure becomes one sanitized sentence: a plan check that
 could block a hand-off by being broken would be a worse check than none.
 
@@ -235,7 +251,9 @@ left to** rather than from a dialog: `ask` writes `ship` and `auto` writes `none
 derived from the mode's own third fact. There is no `effort`: schema 8 removed it,
 because one answer was standing in for which model implements, how hard it thinks
 and how many fix rounds the check buys; schema 9 removed `maxFixRounds` with the
-fixer, and `resumes` says whether the implementer answers the review. Writing a plan is
+fixer, and `resumes` says whether the implementer answers the review; schema 10
+renamed the review tiers to the router's `light` and `normal`, refusing `fast` and
+`frontier` on a lens by name, and added the `adjudicate` stage. Writing a plan is
 not a tool call, so there is no plan-authoring tool in any posture. How each
 deliverable is run is derived from those three things, by pi-workflow, and is not
 written down — this seat no longer compiles a stage document or mirrors the schema

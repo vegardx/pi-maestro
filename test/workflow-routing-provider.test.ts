@@ -231,6 +231,23 @@ describe("the routing port", () => {
 		).toBe("high");
 	});
 
+	it("answers an alias's pinned effort over a requested one, and says so", () => {
+		// SolPro pins high with no allowlist: the step to xhigh is refused.
+		const judge = resolved(port({ effort: "low" }), {
+			persona: "adjudication",
+			tier: "frontier",
+			family: "other",
+			effort: "xhigh",
+		});
+		expect(judge).toMatchObject({
+			alias: "SolPro",
+			thinking: "high",
+			source: "tier",
+			fallbackReason:
+				"effort xhigh requested but alias OpenAI/SolPro pins effort high",
+		});
+	});
+
 	it("reports a fallback to the seat with its reason", () => {
 		const answer = resolved(port({ authenticated: ["openai"] }), {
 			persona: "code-review",

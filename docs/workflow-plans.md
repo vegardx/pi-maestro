@@ -125,8 +125,9 @@ to apply to the deliverable's finished work, and how much reviewer it is worth.
   `fast` executes and never decides, and `frontier` is the adjudicator's tier,
   never a review lens. pi-workflow refuses both the same way at start.
 - `diverse` — ask for a reviewer from a different model family than the
-  implementer. The hand-off writes `diverse: true` onto every `normal` lens that
-  left it unsaid, so the stored document and the run agree.
+  implementer. The hand-off writes `diverse: true` onto every lens authored
+  `tier: "normal"` that left it unsaid, so the stored document and the run
+  agree; a lens that names no tier is left as written.
 
 A review that names neither a `model` nor a `tier` is legal; the policy's
 `reviewDefault.tier` then decides what the reviewer is. At most sixteen reviews

@@ -50,6 +50,14 @@ export interface ModelResolutionRequest {
 	readonly persona: string;
 	/** Explicit tier reference (persona instruction or policy row). Absent = inherit. */
 	readonly tier?: TierId;
+	/**
+	 * The thinking level this request explicitly asks for. It beats an alias's
+	 * default `effort` and the inherited level, and is clamped like either.
+	 * Kept apart from `inherit.effort` because the caller's level is a
+	 * preference an alias default overrides, and an explicit ask is the lever
+	 * that overrides the alias default.
+	 */
+	readonly effort?: ThinkingLevel;
 	/** The caller's model. Absent only at the root, where the seat is the caller. */
 	readonly inherit?: InheritedModel;
 }
@@ -95,8 +103,9 @@ export interface ModelResolution {
 	readonly candidates?: readonly ModelCandidateFact[];
 	/**
 	 * Why resolution degraded. Present when source === "fallback" (the tier
-	 * produced nothing), and on source === "inherit" when an `other-family`
-	 * request had nowhere to go — never silently.
+	 * produced nothing), on source === "inherit" when an `other-family` request
+	 * had nowhere to go, and on source === "tier" when the alias pins an effort
+	 * that refused the explicitly requested one — never silently.
 	 */
 	readonly fallbackReason?: string;
 }
@@ -135,7 +144,11 @@ export interface TierExplanation {
 /** How a role asks for a model: the routing vocabulary, not a model name. */
 export interface RoleRouteRequest {
 	readonly tier?: TierId;
-	/** Preferred thinking level, clamped to the alias and model allowlists. */
+	/**
+	 * Explicit thinking level. Beats the alias's default effort and the
+	 * inherited level, clamped to the alias and model allowlists; an alias that
+	 * pins its effort answers the pin and says so in `fallbackReason`.
+	 */
 	readonly effort?: ThinkingLevel;
 	/** `"other"` means "not the caller's family" — the own-homework rule. */
 	readonly family?: string;
@@ -205,13 +218,20 @@ interface TierWalk {
 }
 
 /**
- * Clamp an inherited/preferred effort into an alias's allowlist ∩ the model's
- * supported levels: exact when allowed, else nearest below, else lowest above.
+ * Pick a thinking level inside an alias's allowlist ∩ the model's supported
+ * levels. Precedence: the explicitly `requested` level, then the alias's
+ * default `effort`, then the `preferred` (inherited) level. The winner is kept
+ * when allowed, else the nearest level below, else the lowest above.
+ *
+ * An alias with a fixed `effort` and no allowlist is a PIN: it answers its own
+ * level whatever was requested, because its author fixed the level on purpose.
+ * A caller that passed a `requested` level records the refusal itself.
  */
 export function clampEffort(
 	preferred: ThinkingLevel | undefined,
 	alias: Pick<AliasConfig, "effort" | "efforts">,
 	model: CatalogModel | undefined,
+	requested?: ThinkingLevel,
 ): ThinkingLevel | undefined {
 	if (alias.effort && !alias.efforts) return alias.effort;
 	const order = THINKING_LEVELS;
@@ -222,7 +242,7 @@ export function clampEffort(
 			(!alias.efforts || alias.efforts.includes(level)),
 	);
 	if (allowed.length === 0) return alias.effort;
-	const wanted = alias.effort ?? preferred;
+	const wanted = requested ?? alias.effort ?? preferred;
 	if (!wanted) return allowed[0];
 	if (allowed.includes(wanted)) return wanted;
 	const at = order.indexOf(wanted);
@@ -286,6 +306,25 @@ export function createModelRouter(
 		if (!port.isAuthenticated(parsed.provider))
 			return { spec, available: false, reason: "not authenticated" };
 		return { spec, available: true, model };
+	}
+
+	/** The catalogue entry behind a `provider/model` ref, when the host has one. */
+	function catalogModel(spec: string): CatalogModel | undefined {
+		const parsed = parseModelSpec(spec);
+		return parsed ? port.findModel(parsed.provider, parsed.modelId) : undefined;
+	}
+
+	/**
+	 * The level a resolution that walked no alias runs at: an explicit request
+	 * clamped to what the model supports, else the caller's level verbatim.
+	 */
+	function untieredEffort(
+		request: ModelResolutionRequest,
+		modelId: string,
+		inherited: ThinkingLevel | undefined,
+	): ThinkingLevel | undefined {
+		if (!request.effort) return inherited;
+		return clampEffort(undefined, {}, catalogModel(modelId), request.effort);
 	}
 
 	/**
@@ -437,10 +476,11 @@ export function createModelRouter(
 			throw new ModelResolutionError(
 				"nothing to inherit: no caller model and no live session model",
 			);
+		const effort = untieredEffort(request, inherited.modelId, inherited.effort);
 		return {
 			source: "inherit",
 			modelId: inherited.modelId,
-			...(inherited.effort ? { effort: inherited.effort } : {}),
+			...(effort ? { effort } : {}),
 			...(reason ? { fallbackReason: reason } : {}),
 		};
 	}
@@ -456,7 +496,14 @@ export function createModelRouter(
 			request.inherit?.effort,
 			entry.config,
 			entry.model,
+			request.effort,
 		);
+		const pin =
+			entry.config.efforts === undefined ? entry.config.effort : undefined;
+		const refused =
+			pin !== undefined &&
+			request.effort !== undefined &&
+			request.effort !== pin;
 		return {
 			source: "tier",
 			modelId: entry.fact.model as string,
@@ -470,6 +517,11 @@ export function createModelRouter(
 			bindingId: walk.bindingId,
 			rosterId: walk.rosterId,
 			candidates: walk.candidates,
+			...(refused
+				? {
+						fallbackReason: `effort ${request.effort} requested but alias ${entry.fact.ref} pins effort ${pin}`,
+					}
+				: {}),
 		};
 	}
 
@@ -487,10 +539,11 @@ export function createModelRouter(
 				`tier ${tier} has no available model and there is no session model to fall back to`,
 			);
 		const struck = walk.candidates.filter((fact) => !fact.available).length;
+		const effort = untieredEffort(request, walk.seat, request.inherit?.effort);
 		return {
 			source: "fallback",
 			modelId: walk.seat,
-			...(request.inherit?.effort ? { effort: request.inherit.effort } : {}),
+			...(effort ? { effort } : {}),
 			tier,
 			bindingId: walk.bindingId,
 			rosterId: walk.rosterId,
@@ -622,15 +675,11 @@ export function createModelRouter(
 		request: RoleRouteRequest = {},
 	): ModelResolution | null {
 		const tier = request.tier ?? defaultTierFor(role);
-		const inheritBase =
-			request.inherit ?? (seat ? { modelId: seat } : undefined);
-		const inherit =
-			inheritBase && request.effort
-				? { ...inheritBase, effort: request.effort }
-				: inheritBase;
+		const inherit = request.inherit ?? (seat ? { modelId: seat } : undefined);
 		const base: ModelResolutionRequest = {
 			persona: role,
 			...(tier ? { tier } : {}),
+			...(request.effort ? { effort: request.effort } : {}),
 			...(inherit ? { inherit } : {}),
 		};
 		try {

@@ -586,6 +586,125 @@ describe("spreadFor", () => {
 	});
 });
 
+// ─── explicit effort ─────────────────────────────────────────────────────────
+// Three inputs, kept apart: an explicit request beats the alias default, which
+// beats the inherited level. Every one is clamped to the alias allowlist ∩ what
+// the model supports, so "the first lever on a dependent chain" — an effort
+// step on the same alias — actually moves the level.
+
+describe("explicit effort", () => {
+	it("beats the alias default and the inherited level inside the allowlist", () => {
+		// Sol defaults to high and allows {medium, high}; the caller runs high.
+		const resolution = router().resolve({
+			persona: "deliverable-worker",
+			tier: "light",
+			effort: "medium",
+			inherit: { modelId: "gw2/seat", effort: "high" },
+		});
+		expect(resolution).toMatchObject({ alias: "Sol", effort: "medium" });
+		expect(resolution.fallbackReason).toBeUndefined();
+	});
+
+	it("clamps a level outside the allowlist to the nearest below, else the lowest above", () => {
+		const at = (effort: ThinkingLevel) =>
+			router().resolve({ persona: "deliverable-worker", tier: "light", effort })
+				.effort;
+		// Sol allows {medium, high}: max steps down to high, off steps up to medium.
+		expect(at("max")).toBe("high");
+		expect(at("off")).toBe("medium");
+	});
+
+	it("clamps to the levels the model supports, not only the allowlist", () => {
+		// Kimi has no allowlist and its model maps neither xhigh nor max.
+		expect(
+			router({ unavailable: ["gw1/sol", "gw2/sol"] }).resolve({
+				persona: "deliverable-worker",
+				tier: "light",
+				effort: "max",
+			}),
+		).toMatchObject({ alias: "Kimi", effort: "high" });
+	});
+
+	it("loses to an alias that pins its effort, and the answer says so", () => {
+		// Quick fixes effort low with no allowlist: a pin, answered as authored.
+		const refused = router().resolve({
+			persona: "codebase-research",
+			tier: "fast",
+			effort: "high",
+		});
+		expect(refused).toMatchObject({
+			source: "tier",
+			alias: "Quick",
+			effort: "low",
+		});
+		expect(refused.fallbackReason).toBe(
+			"effort high requested but alias OpenAI/Quick pins effort low",
+		);
+		// Asking for the pinned level is no refusal.
+		expect(
+			router().resolve({
+				persona: "codebase-research",
+				tier: "fast",
+				effort: "low",
+			}).fallbackReason,
+		).toBeUndefined();
+	});
+
+	it("beats the inherited level on an inherit, clamped to the model", () => {
+		expect(
+			router().resolve({
+				persona: "deliverable-worker",
+				effort: "low",
+				inherit: { modelId: "gw1/parent", effort: "high" },
+			}),
+		).toMatchObject({
+			source: "inherit",
+			modelId: "gw1/parent",
+			effort: "low",
+		});
+		expect(
+			router().resolve({
+				persona: "deliverable-worker",
+				effort: "xhigh",
+				inherit: { modelId: "gw1/parent", effort: "low" },
+			}).effort,
+		).toBe("high");
+	});
+
+	it("beats the inherited level on a seat fallback, clamped to the seat", () => {
+		expect(
+			router({ unavailable: ["gw1/sol", "gw2/sol", "gw2/kimi"] }).resolve({
+				persona: "deliverable-worker",
+				tier: "light",
+				effort: "xhigh",
+				inherit: { modelId: "gw2/seat", effort: "low" },
+			}),
+		).toMatchObject({
+			source: "fallback",
+			modelId: "gw2/seat",
+			effort: "high",
+		});
+	});
+
+	it("reaches the router through resolveForRole without touching the seat's level", () => {
+		const r = router();
+		expect(
+			r.resolveForRole("deliverable-worker", {
+				tier: "light",
+				effort: "medium",
+				inherit: { modelId: "gw2/seat", effort: "high" },
+			})?.effort,
+		).toBe("medium");
+		// With no explicit level the alias default still wins over the seat's.
+		expect(
+			r.resolveForRole("deliverable-worker", {
+				tier: "light",
+				inherit: { modelId: "gw2/seat", effort: "medium" },
+			})?.effort,
+		).toBe("high");
+	});
+});
+
 // ─── other-family ────────────────────────────────────────────────────────────
 // The model selector for a DIRECT (non-fanned) spawn. `other-family` walks the
 // allowance's tiers in order and takes the first available entry whose family
@@ -820,7 +939,7 @@ describe("resolveForRole", () => {
 				tier: "light",
 				effort: "minimal",
 			})?.effort,
-		).toBe("high");
+		).toBe("medium");
 	});
 
 	it("returns null rather than throwing on an unreachable request", () => {

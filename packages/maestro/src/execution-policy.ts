@@ -82,7 +82,7 @@ export const DEFAULT_BASH_POLICIES: BashModePolicies = {
 export const DEFAULT_EXECUTION_POLICY: ExecutionPolicySettings = {
 	auditor: {
 		enabled: true,
-		tier: "light",
+		tier: "fast",
 		timeoutMs: 120_000,
 		maxTokens: 50_000,
 	},

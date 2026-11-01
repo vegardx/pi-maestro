@@ -13,7 +13,7 @@ warns once at start.
       "bash": {
         "auditor": {
           "enabled": true,
-          "tier": "light",
+          "tier": "fast",
           "model": null,
           "timeoutMs": 120000,
           "maxTokens": 50000
@@ -85,9 +85,10 @@ repository-local executables and arbitrary flags are rejected. This is a
 cooperative steering mechanism, not a guarantee that an executable's help mode
 is side-effect free.
 
-`tier` resolves through the configured model roster; `model` may instead bind an
-exact `provider/model`. The raw command, intent, parsed arguments, and bounded
-probe output are sent unchanged to that model, which may resolve to a different
+`tier` is one of `fast`, `light`, `normal`, or `frontier` and resolves through
+the configured model roster; `model` may instead bind an exact
+`provider/model`. The raw command, intent, parsed arguments, and bounded probe
+output are sent unchanged to that model, which may resolve to a different
 provider than the seat. Do not place credentials directly in shell arguments.
 A failed, timed-out, malformed, invalid, or repeated probe leaves the assessment
 uncertain, so the mode's `uncertain` action applies. Audits and probe results are

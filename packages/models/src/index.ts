@@ -1,7 +1,7 @@
 // @vegardx/pi-models — authenticated ordered role-pool model resolution.
 //
 // Families → aliases → concrete `provider/model` attachments; rosters order
-// aliases into light/standard/heavy tiers; bindings select a roster from the
+// aliases into fast/light/normal/frontier tiers; bindings select a roster from the
 // seat model; a region allowlist and per-persona tier allowances bound what
 // anything may reach. `createModelRouter(config, port)` answers a role with one
 // serializable `ModelResolution`.

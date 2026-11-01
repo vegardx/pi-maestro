@@ -29,7 +29,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SEAT = "anthropic/opus";
 const WORKER = "openai/sol";
-// A minimal config: support work prefers the light OpenAI attachment.
+// A minimal config: support work prefers the fast OpenAI attachment.
 const MODELS_BLOCK = {
 	families: {
 		OpenAI: { aliases: { Sol: { attach: [WORKER], effort: "medium" } } },
@@ -37,14 +37,14 @@ const MODELS_BLOCK = {
 	},
 	rosters: {
 		r: {
+			fast: ["OpenAI/Sol"],
 			light: ["OpenAI/Sol"],
-			standard: ["OpenAI/Sol"],
-			heavy: ["Anthropic/Opus"],
+			frontier: ["Anthropic/Opus"],
 		},
 	},
 	bindings: { r: { roster: "r" } },
 	allowances: {
-		"codebase-research": { tiers: ["light", "standard"] },
+		"codebase-research": { tiers: ["fast", "light"] },
 	},
 } as const;
 

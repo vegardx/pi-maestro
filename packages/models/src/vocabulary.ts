@@ -1,5 +1,5 @@
 // v2 model configuration vocabulary: families (ranked; each holds free-text
-// aliases with ordered per-provider attachments), rosters (three fixed-meaning
+// aliases with ordered per-provider attachments), rosters (four fixed-meaning
 // tiers holding ordered alias refs), bindings (thin seat→roster bindings),
 // region (the active model allowlist), and per-persona tier allowances.
 // See docs/design/v2-primitives.md and memory/project-model-families-design.
@@ -7,12 +7,18 @@
 import type { ThinkingLevel } from "./thinking.js";
 
 /**
- * The three tiers with fixed meanings. The structure IS the routing: `light`
- * serves sweeps/gates/classification, `standard` the daily drivers and
- * candidate pools, `heavy` judging and deep review. Personas and rules
- * reference tiers by these names.
+ * The four tiers with fixed meanings. The structure IS the routing; personas
+ * and rules reference tiers by these names, in this order of capability.
+ *
+ * - `fast` — narrow mechanical checks and classification. Executes, never
+ *   decides.
+ * - `light` — the default implementer and the in-package review lens.
+ * - `normal` — work that crosses a boundary, touches a persisted format,
+ *   concurrency or security, reads large input, or validates `fast` work.
+ * - `frontier` — judgement only: adjudication and synthesis. Never an
+ *   implementer, never fanned out.
  */
-export const TIER_IDS = ["light", "standard", "heavy"] as const;
+export const TIER_IDS = ["fast", "light", "normal", "frontier"] as const;
 export type TierId = (typeof TIER_IDS)[number];
 
 /**
@@ -85,7 +91,7 @@ export type DirectSelector = (typeof DIRECT_SELECTORS)[number];
 
 /**
  * Per-persona tier allowance: which tiers work of this kind may draw from.
- * Keyed by PERSONA id (free text): `code-review` wanting a heavy tier is a
+ * Keyed by PERSONA id (free text): `code-review` wanting a normal tier is a
  * statement about the work, not about a posture. Harness callers (classifier,
  * summarizer, command-auditor, watcher) are tuned via rules, not allowances.
  */
@@ -110,7 +116,8 @@ export interface AgentAllowanceConfig {
 export const MAX_SPREAD = 5;
 
 /**
- * Generic resolver defaults retained for configured personas. Current
+ * Generic resolver defaults retained for configured personas. `tiers[0]` is
+ * the tier a persona resolves at when the caller names none. Current
  * pi-maestro callers use only `codebase-research`; workflow execution belongs
  * to the future standalone workflow package.
  */
@@ -118,9 +125,10 @@ export const DEFAULT_PERSONA_ALLOWANCES: Readonly<
 	Record<string, AgentAllowanceConfig>
 > = {
 	"deliverable-worker": { tiers: [] },
-	"codebase-research": { tiers: ["light", "standard"] },
-	"code-review": { tiers: ["standard", "heavy"], spread: 3 },
-	standby: { tiers: ["heavy", "standard"], spread: 2 },
+	"codebase-research": { tiers: ["light", "fast", "normal"] },
+	"code-review": { tiers: ["light", "normal"], spread: 3 },
+	adjudication: { tiers: ["frontier", "normal"] },
+	standby: { tiers: ["frontier", "normal"], spread: 2 },
 };
 
 /**

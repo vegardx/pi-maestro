@@ -1,3 +1,4 @@
+import { TIER_IDS, type TierId } from "@vegardx/pi-models";
 import {
 	type ExtensionConfig,
 	type ProjectTrust,
@@ -16,7 +17,7 @@ import { MODE_NAMES, type ModeName } from "./mode.js";
 
 export interface BashAuditorSettings {
 	readonly enabled: boolean;
-	readonly tier: "light" | "standard" | "heavy";
+	readonly tier: TierId;
 	readonly model?: string;
 	readonly timeoutMs: number;
 	readonly maxTokens: number;
@@ -139,7 +140,7 @@ export function readExecutionPolicySettings(
 			enabled: readPath(config, "bash.auditor.enabled") !== false,
 			tier: choice(
 				readPath(config, "bash.auditor.tier"),
-				["light", "standard", "heavy"] as const,
+				TIER_IDS,
 				DEFAULT_EXECUTION_POLICY.auditor.tier,
 			),
 			...(typeof model === "string" && model.includes("/") ? { model } : {}),

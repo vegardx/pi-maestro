@@ -206,7 +206,7 @@ export const PLAN_CHECK_CEILING: Readonly<DelegationCeiling> = Object.freeze({
 
 // ── The contract this seat was built against ─────────────────────────────────
 
-export const REQUIRED_SUBAGENT_CONTRACT_REVISION = 12;
+export const REQUIRED_SUBAGENT_CONTRACT_REVISION = 13;
 
 /**
  * The features the plan check depends on.
@@ -224,6 +224,11 @@ export const REQUIRED_SUBAGENT_FEATURES = Object.freeze([
 	// Revision 9. The plan check asks for `model: "inherit"`, so a runtime that
 	// cannot resolve one would refuse the one launch this seat makes.
 	"sessionModelInherit",
+	// Revision 13. Every builtin workflow template names no model and admits
+	// `host`, so the fence over what those tasks may run on is the admission
+	// provider this seat registers; a runtime that cannot ask it refuses every
+	// one of them at preflight.
+	"hostModelAdmission",
 ] as const);
 
 /**
@@ -243,7 +248,7 @@ export function subagentContractMismatch(
 		return `the installed pi-subagent declares contract revision ${contract.contractRevision}, and this seat was built against ${REQUIRED_SUBAGENT_CONTRACT_REVISION}`;
 	for (const feature of REQUIRED_SUBAGENT_FEATURES)
 		if (contract.features[feature] !== true)
-			return `the installed pi-subagent declares \`${feature}: false\`, and the plan check needs it`;
+			return `the installed pi-subagent declares \`${feature}: false\`, and this seat needs it`;
 	return undefined;
 }
 

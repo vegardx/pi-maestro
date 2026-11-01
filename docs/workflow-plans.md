@@ -2,7 +2,7 @@
 
 An authored plan describes repositories, deliverables, dependency edges, the
 work each deliverable is, and who reads that work when it is done. It is intent,
-not runtime state. It is stored at `schemaVersion: 8`.
+not runtime state. It is stored at `schemaVersion: 10`.
 
 ## The flow, from an idea to a shipped pull request
 
@@ -32,6 +32,14 @@ run got to.
 
 **No command is ever named for a decision.** Everything a person has to decide is
 a dialog in the session that started the run.
+
+**Version 10 renamed the review tiers** to the router's own vocabulary: a lens
+is `light` or `normal` (the default). The router's other two tiers are **refused
+on a lens by name**, with the reason: `fast` executes and never decides, and
+`frontier` is adjudication and synthesis only. The old `standard` and `heavy` are
+refused as unknown tiers. Version 10 also compiles an `adjudicate` stage: a judge
+from another model family rules on what the resumed implementer contested. A
+`schemaVersion: 9` envelope is refused; there is no migration.
 
 **Version 9 removed `policy.maxFixRounds`** with the fixer it budgeted. The
 implementer that wrote a deliverable is resumed in its own session with the check
@@ -110,12 +118,15 @@ to apply to the deliverable's finished work, and how much reviewer it is worth.
 - `model` — an exact `provider/model` ID, validated only when present. Pinning
   one makes the plan run on hosts that have that model and nowhere else.
 - `skill` — an ambient skill name to request explicitly in the stage prompt.
-- `tier` — `light`, `standard`, or `heavy`: how much reviewer the lens is
-  worth. **This is the per-reviewer effort knob**: the tier picks the model when
-  none is pinned and the thinking level either way, and the review record
-  stamps the model and thinking level each reviewer actually ran at.
+- `tier` — `light` or `normal`: how much reviewer the lens is worth. **This is
+  the per-reviewer effort knob**: the seat's router picks the model for the tier
+  when none is pinned, and the review record stamps the tier, model and thinking
+  level each reviewer actually ran at. `fast` and `frontier` are refused by name:
+  `fast` executes and never decides, and `frontier` is the adjudicator's tier,
+  never a review lens. pi-workflow refuses both the same way at start.
 - `diverse` — ask for a reviewer from a different model family than the
-  implementer.
+  implementer. The hand-off writes `diverse: true` onto every `normal` lens that
+  left it unsaid, so the stored document and the run agree.
 
 A review that names neither a `model` nor a `tier` is legal; the policy's
 `reviewDefault.tier` then decides what the reviewer is. At most sixteen reviews
@@ -160,8 +171,9 @@ executes:
   { "use": "review-fan-out", "id": "review",
     "lenses": [ /* one per `reviews` entry, tier and diverse from it or policy.reviewDefault */ ] },
   { "use": "normalize",      "id": "normalize" },
-  { "use": "resume",         "id": "resume" },   // policy.resumes: 1
-  { "use": "check",          "id": "recheck" } ] // policy.resumes: 1
+  { "use": "resume",         "id": "resume" },     // policy.resumes: 1
+  { "use": "check",          "id": "recheck" },    // policy.resumes: 1
+  { "use": "adjudicate",     "id": "adjudicate" } ] // reviews and policy.resumes: 1
 ```
 
 The implementer hands off; the check and every review lens run on that hand-off
@@ -170,13 +182,19 @@ The harness clusters the findings by place without judging them; when more than
 one lens reported, a model may only *merge* clusters that state the same problem.
 The resumed implementer is shown the check report and each cluster's claim,
 location and evidence — no severity, lens, model or agreement — and answers every
-one; `recheck` checks its hand-off when it changed anything. The run records
-`reviews-<d>`: every reviewer (lens, model, thinking, attempt, status), every
-cluster with who reported it and how many agreed, and each disposition with its
-reasoning.
+one; `recheck` checks its hand-off when it changed anything. Every cluster it
+answered `declined` or `out-of-scope` — except one only `fast` lenses reported —
+goes to one read-only judge: a `frontier`-tier model of a family other than the
+seat's, which sees the change and each contested claim beside the implementer's
+reasoning and rules `upheld`, `overruled` or `undecidable`. It answers nobody and
+never holds the run; above 60 context chunks pi-workflow skips it with a log
+line. The run records `reviews-<d>`: every reviewer (lens, tier, model, thinking,
+attempt, status), every cluster with who reported it and how many agreed, each
+disposition with its reasoning, and each verdict.
 
-The review and normalize stages are **omitted** rather than declared empty when
-the deliverable lists no reviews: a fan-out over zero lenses is not a cheaper
+The review, normalize and adjudicate stages are **omitted** rather than declared
+empty when the deliverable lists no reviews, and `adjudicate` is omitted under
+`resumes: 0`, where nothing is contested: a fan-out over zero lenses is not a cheaper
 review, it is a stage that cannot be compiled. The resume stays, because a
 failing check is something to answer with nobody reviewing. Where a run stops
 for a human is `policy.gates` rather than a stage of its own.
@@ -200,7 +218,7 @@ can see where a run is going and the plan digest covers it.
 | Field | Values | Default |
 | --- | --- | --- |
 | `gates` | `ship`, `every-deliverable`, `none` | `ship` |
-| `reviewDefault` | `{tier?, diverse?}` | `{tier: "standard", diverse: false}` |
+| `reviewDefault` | `{tier?, diverse?}` | `{tier: "normal", diverse: false}` |
 | `resumes` | `0`, `1` | `1` |
 | `publish` | `{mode: "none"\|"branch"\|"pr", base?}` | `{mode: "none"}` |
 
@@ -239,8 +257,8 @@ cannot honour is not written down in the first place.
     "after": [], "reads": [],
     "tasks": [{ "id": "impl", "title": "Write src/components/*.ts" },
               { "id": "tests", "title": "Cover each component" }],
-    "reviews": [{ "lens": "contracts", "tier": "heavy", "diverse": true },
-                { "lens": "replay", "tier": "standard" }]
+    "reviews": [{ "lens": "contracts", "tier": "normal", "diverse": true },
+                { "lens": "replay", "tier": "light" }]
   }]
 }
 ```
@@ -501,13 +519,17 @@ service seam, allowlisted to that one definition by name and validated exactly a
 `workflow_run` would be — and then switches to the posture asked for at `/mode`.
 Those two options are the whole call: no effort, and nothing else beside the input.
 
-`plan-to-ship` declares `needs: {workspace: "worktree", sessionModel: true}`, so a
-start is refused **before any run exists** on a host that registered no
-session-model provider, naming the definition: *`plan-to-ship` inherits the session
-model, and this host has none.* This seat registers one at load, so that sentence
-appearing means something else registered first — pi-subagent allows exactly one
-provider per process — and the seam says that rather than pointing at `/plan run`,
-which would be refused for the same reason.
+`plan-to-ship` declares `needs: {workspace: "worktree", sessionModel: true,
+modelRouting: true}`, so a start is refused **before any run exists** on a host
+that registered no session-model provider or no model router, naming the
+definition: *`plan-to-ship` inherits the session model, and this host has none.*
+This seat registers both at load, so that sentence appearing means something else
+registered first — pi-subagent and pi-workflow each allow exactly one provider per
+process — and the seam says that rather than pointing at `/plan run`, which would
+be refused for the same reason. Every builtin template also names no model and
+lists `host` in `allowedModels`, so each task's model is admitted by the
+model-admission provider this seat registers; see
+[models](models.md#the-host-fence).
 The model is not asked to start it and is not in that loop at all. **Starting it is
 the approval**, and from `auto` it is the approval for publication too. A runtime
 that refuses or fails to start it leaves the plan stored, takes the posture the
@@ -525,23 +547,25 @@ compose · d1 · review review-d1/contracts — {findings: [2 item(s)]}
 compose · d1 · normalize normalize-d1 — 2 of 3 reviewers reported; security did not, …
 compose · d1 · resume resume-d1 — The implementer was resumed in its own session …
 compose · d1 · check recheck-d1 — the suite passes
+compose · d1 · adjudicate adjudicate-d1 — A judge from another model family, …
 compose · the run · gate ship — the ship decision is waiting
 ```
 
 **The stage keys are pi-workflow's, and it derives them from the key alone.**
 Per deliverable `<d>`: `implement-<d>`, `check-<d>`, the namespace `review-<d>`
-with one member per lens at `review-<d>/<lens>`, `normalize-<d>`, `resume-<d>`
-and `recheck-<d>`, which narrates as a `check`. The
+with one member per lens at `review-<d>/<lens>`, `normalize-<d>`, `resume-<d>`,
+`recheck-<d>`, which narrates as a `check`, and `adjudicate-<d>`. The
 gates are `approve-<d>` under `every-deliverable`, and `ship` — which names no
 deliverable, because it is the whole run's decision. A key this convention does
 not name narrates as `other`, which is an honest answer and not a failure.
 
 Most of it gets **no turn**: a task implemented, a check passed, one review
 filed, a refine — those are facts the next turn should have, and a turn per task
-would mean the model narrating its own silence forty times. Four things get a
+would mean the model narrating its own silence forty times. Five things get a
 turn, because each is something only the model can turn into a sentence a person
 can act on: **normalize** (the reviewers of a deliverable have reported), **resume**
-(the implementer has answered the check and the review), a **failure** of a task or
+(the implementer has answered the check and the review), **adjudicate** (a judge
+has ruled on what the implementer contested), a **failure** of a task or
 the run, and the **ship gate arriving** — which says that a decision is waiting and
 that it is waiting **in the dialog on screen**. It names no command: the sentence
 used to carry `/workflow decide <prefix> ship {"ship":true}`, and a model telling
@@ -550,7 +574,7 @@ them. A run that ends without ever stopping at a gate gets a final summary, with
 turn, because a run that finished and asked for nothing is exactly the case a silent
 seat used to leave a person guessing about.
 
-**At normalize and resume the line is the journal's, never a child's.** The task's
+**At normalize, resume and adjudicate the line is the journal's, never a child's.** The task's
 own summary there is a model's words — a merge answer the harness may refuse, the
 implementer's account of itself — so the line is built from what the batch's one
 inspection proves: which review tasks of the deliverable completed and which did
@@ -573,8 +597,10 @@ Three dialogs, all of them in the session that started the run.
 **The ship dialog (`ask`).** When the `ship` gate arrives, the gate's own inputs —
 `summary-<d>`, `reviews-<d>` and `check-<d>` per deliverable — go on screen: the
 first line says how the findings across the run were answered (`fixed`,
-`declined`, `out of scope`, `unanswered`), and per deliverable the implementation
-summary, the review's counts and the last check. Then one select:
+`declined`, `out of scope`, `unanswered`) and what the judge made of the contested
+ones (`contested`, `upheld`, `overruled`, `undecidable`), and per deliverable the
+implementation summary, the review's counts, the contested counts and the last
+check. Then one select:
 
 | Answer | What it does |
 | --- | --- |
@@ -587,14 +613,21 @@ summary, the review's counts and the last check. Then one select:
 *Look first*, the account an `auto` run posts after publishing, and the pull
 request's body under `## Review`. Per deliverable it says how many reviewers
 reported, how many findings and how many two or more reviewers raised, the
-dispositions, and the check; it names every **declined** finding, every reviewer
+dispositions, the check, and `Adjudication: <n> contested (<u> upheld, <o>
+overruled, <d> undecidable)` — followed, on an `auto` run, by pi-workflow's
+sentence when so much was contested that the spec is the likely problem. It names
+every finding the judge **upheld**, every **declined** finding, every reviewer
 that **did not report** (and so counts in no agreement), and lists each finding as
 
 ```text
-- <claim> — <file>:<line> · found by <lens> (<model>, <thinking>) ×<agreed> of <reported> · <severity> · <disposition> (<reasoning>) [<id>]
+- <claim> — <file>:<line> · found by <lens> [<tier>] (<model>, <thinking>) ×<agreed> of <reported> · <severity> · <disposition> (<reasoning>) · judge: <verdict> (<reasoning>) [<id>]
 ```
 
-declines first. It is bounded — at most ten findings per deliverable and forty in
+in this order: upheld, declined, unanswered, out of scope, overruled, fixed. A
+decline or out-of-scope the judge ruled `undecidable`, or never saw, stands as the
+implementer answered it. The contested counts are worked out from the record, the
+same way pi-workflow's `contestedClusters` does, so a gate and a ship summary
+cannot count one record two ways. It is bounded — at most ten findings per deliverable and forty in
 all, claims and reasoning cut, at most four reporters named — and says how many
 findings it left out and that the full record is in the run's receipt, which keeps a
 pull-request body under GitHub's limit. **A decline never holds the run**: it is the

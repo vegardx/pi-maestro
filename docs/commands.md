@@ -173,7 +173,7 @@ Nothing else is asked, because nothing else is a question for a human:
 | Whether the review is answered | `policy.resumes`, default `1`: the implementer is resumed once to answer the check and every review finding. Schema 9 removed `maxFixRounds` with the fixer |
 | Publication | Derived: an `origin` remote and `gh` on PATH → `pr`; a remote alone → `branch`; neither → `none` |
 | Base branch | What this branch tracks, else `origin`'s head, else `main` |
-| Review lenses | The plan's own `reviews` and its `policy.reviewDefault`. Every heavy review whose `diverse` is undefined has `diverse: true` written into the **stored** plan, where the digest covers it; one that says `diverse: false` keeps its answer |
+| Review lenses | The plan's own `reviews` and its `policy.reviewDefault`. Every `normal` review whose `diverse` is undefined has `diverse: true` written into the **stored** plan, where the digest covers it; one that says `diverse: false` keeps its answer |
 | The delegation ceiling | The posture: `plan` → read-only, `ask` and `auto` → read-only or a worktree, `hack` → none |
 
 The derivation is stated in the confirmation, as one sentence naming what was
@@ -297,9 +297,9 @@ Authored plans live under their project's key, beside that project's sessions:
 <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
 ```
 
-The envelope is `{schemaVersion: 9, savedAt, authoredBy: {sessionId, cwd}, body}`.
-`authoredBy` is required, and a schema 8 envelope — whose `policy` may carry the
-`maxFixRounds` dial version 9 removed — is refused by name rather than
+The envelope is `{schemaVersion: 10, savedAt, authoredBy: {sessionId, cwd}, body}`.
+`authoredBy` is required, and a schema 9 envelope — whose lenses may name the
+`standard` and `heavy` tiers version 10 retired — is refused by name rather than
 migrated.
 
 `/plan ship` appends one receipt per publication, and never rewrites an earlier

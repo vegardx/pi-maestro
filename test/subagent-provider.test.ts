@@ -736,6 +736,23 @@ describe("the host model fence", () => {
 		expect(admitsModel(fakeRouting(), exact(MAX_ONLY, "xhigh"))).toBe(true);
 	});
 
+	// The session-model provider and the fence must agree about the seat even on
+	// a model that does no reasoning: Pi clamps such a session to `off`, the
+	// provider announces `off`, and the fence admits exactly that.
+	it("admits a non-reasoning seat at the level the session-model provider announces", () => {
+		const bus = fakeBus();
+		registerSessionModelFor(bus, () => ({
+			model: { provider: "openai", id: "flat" },
+			thinkingLevel: "off",
+		}));
+		registerModelAdmissionFor(bus, () =>
+			fakeRouting({ seat: FLAT, effort: "off" }),
+		);
+		const session = resolveSessionModel(bus);
+		expect(session).toEqual(exact(FLAT, "off"));
+		expect(resolveModelAdmission(bus, session as never)).toBe(true);
+	});
+
 	it("refuses everything with no live session", () => {
 		expect(admitsModel(undefined, exact(SEAT, "medium"))).toBe(false);
 	});

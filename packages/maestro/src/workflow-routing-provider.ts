@@ -131,11 +131,12 @@ function roleName(role: ModelRoleRequest): string {
  * THE ROUTER IS BUILT PER CALL from the live context, never captured: the seat
  * model, its thinking level and the `models` settings all move under a running
  * session. The session's model and thinking level are passed as the caller the
- * router inherits from, so a role that names no effort prefers the seat's — on
- * a tier pick that preference is clamped to the alias and the model, and on an
- * inherit or a fallback it IS the thinking level. Whatever the router answers
- * is clamped once more to the levels Pi runs the resolved model at, because the
- * admission provider beside this one refuses any other, and a routed model
+ * router inherits from, and a role's own effort is passed apart from it: an
+ * explicit effort beats the alias default, which beats the seat's level, each
+ * clamped by the router to the alias and the model. On an inherit or a fallback
+ * with no explicit effort the seat's level IS the thinking level, verbatim, so
+ * the answer is clamped once more to the levels Pi runs the resolved model at:
+ * the admission provider beside this one refuses any other, and a routed model
  * refused by its own seat would fail every task routed to it.
  */
 export function createMaestroRoutingPort(

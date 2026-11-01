@@ -44,8 +44,8 @@ first tier is the one a persona resolves at when the caller names none:
 
 The current harness roles map to the `codebase-research` support persona.
 
-The Bash classifier explicitly requests `fast`. Smart compact uses the
-persona's default tier. An exact classifier model may be configured under
+The Bash classifier explicitly requests `fast`. Smart compact explicitly
+requests `light`. An exact classifier model may be configured under
 `extensionConfig.maestro.bash.auditor.model`.
 
 ## Resolution

@@ -120,7 +120,9 @@ export default defineExtension(
 			);
 			try {
 				const resolved = await abortable(
-					resolveModelForRole(ctx, "compact-summarizer"),
+					// Named rather than left to the persona's default, so reordering
+					// the allowance can never hand summarising to `fast`.
+					resolveModelForRole(ctx, "compact-summarizer", { tier: "light" }),
 					callSignal,
 				);
 				if (!resolved) {

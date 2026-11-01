@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TIER_IDS } from "@vegardx/pi-models";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	DEFAULT_GATES,
@@ -27,9 +28,12 @@ import {
 	type Plan,
 	type PlanHostPort,
 	type PlanPolicy,
+	REFUSED_REVIEW_TIERS,
+	REVIEW_TIERS,
 	type RepoProbe,
 	type Review,
 	resolvePolicy,
+	STAGE_KINDS,
 	type Task,
 	validatePlan,
 	withDefaultStages,
@@ -93,7 +97,7 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 		const d = deliverable("api", {
 			tasks: [task("build"), task("tests"), task("docs")],
 			reviews: [
-				{ lens: "security", tier: "heavy", diverse: true },
+				{ lens: "security", tier: "normal", diverse: true },
 				{ lens: "contracts" },
 			],
 		});
@@ -110,13 +114,14 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 				lenses: [
 					// What the review pinned wins; what it left open comes from the
 					// policy, which is what `reviewDefault` is for.
-					{ id: "security", tier: "heavy", diverse: true },
-					{ id: "contracts", tier: "standard", diverse: false },
+					{ id: "security", tier: "normal", diverse: true },
+					{ id: "contracts", tier: "normal", diverse: false },
 				],
 			},
 			{ use: "normalize", id: "normalize" },
 			{ use: "resume", id: "resume" },
 			{ use: "check", id: "recheck" },
+			{ use: "adjudicate", id: "adjudicate" },
 		]);
 	});
 
@@ -124,7 +129,7 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 		const d = deliverable("api", {
 			reviews: [
 				{ lens: "correctness", tier: "light" },
-				{ lens: "correctness", tier: "heavy" },
+				{ lens: "correctness", tier: "normal" },
 			],
 		});
 		expect(errorsOf(plan({ deliverables: [d] }))).toEqual([]);
@@ -134,7 +139,7 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 		expect(review).toMatchObject({
 			lenses: [
 				{ id: "correctness", tier: "light" },
-				{ id: "correctness", tier: "heavy" },
+				{ id: "correctness", tier: "normal" },
 			],
 		});
 	});
@@ -175,8 +180,27 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 			"normalize",
 			"resume",
 			"recheck",
+			"adjudicate",
 		]);
 		expect(uses(0)).toEqual(["implement", "check", "review", "normalize"]);
+	});
+
+	// pi-workflow 8's `derivedStagesFor`: the judge rules on what the resumed
+	// implementer contested, so it needs both a review and a resume, and it runs
+	// after the recheck.
+	it("adjudicates only a reviewed deliverable whose implementer is resumed", () => {
+		const ids = (reviews: Review[], resumes: 0 | 1) =>
+			defaultStagesFor(
+				deliverable("api", { reviews }),
+				resolvePolicy({ resumes }),
+			).map((stage) => stage.use);
+		expect(ids([{ lens: "security" }], 1).at(-1)).toBe("adjudicate");
+		expect(ids([{ lens: "security" }], 1).indexOf("adjudicate")).toBe(
+			ids([{ lens: "security" }], 1).lastIndexOf("check") + 1,
+		);
+		expect(ids([{ lens: "security" }], 0)).not.toContain("adjudicate");
+		expect(ids([], 1)).not.toContain("adjudicate");
+		expect(STAGE_KINDS).toContain("adjudicate");
 	});
 
 	// There used to be a test here asserting that every plan this validator
@@ -219,7 +243,7 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 	it("resolves every dial, and keeps a value it does not know out of the way", () => {
 		expect(resolvePolicy()).toEqual({
 			gates: "ship",
-			reviewDefault: { tier: "standard", diverse: false },
+			reviewDefault: { tier: "normal", diverse: false },
 			resumes: 1,
 			publish: { mode: "none" },
 		});
@@ -299,7 +323,7 @@ describe("what a `reviews` list may not say", () => {
 		const errors = errorsOf(
 			reviewed([
 				{ lens: "replay", model: "fable" },
-				{ lens: "contracts", tier: "exhaustive" as "heavy" },
+				{ lens: "contracts", tier: "exhaustive" as "normal" },
 			]),
 		);
 		expect(errors).toContainEqual(
@@ -308,6 +332,43 @@ describe("what a `reviews` list may not say", () => {
 		expect(errors).toContainEqual(
 			expect.stringContaining("`exhaustive` is not a review tier"),
 		);
+	});
+
+	// v10: a lens names one of two of the router's four tiers. The other two have
+	// jobs of their own and are refused by name, saying which job; the tiers v9
+	// had are no tiers at all.
+	it("refuses `fast` and `frontier` on a lens by name, saying why", () => {
+		expect(
+			errorsOf(reviewed([{ lens: "security", tier: "fast" as "light" }])),
+		).toEqual([
+			"api.reviews[0]: `fast` executes and never decides, so it is never a review lens — author it at light or normal",
+		]);
+		expect(
+			errorsOf(reviewed([{ lens: "security", tier: "frontier" as "normal" }])),
+		).toEqual([
+			"api.reviews[0]: `frontier` is adjudication and synthesis only — it judges what the implementer contested — never a review lens — author it at light or normal",
+		]);
+		expect(
+			errorsOf(
+				plan({ policy: { reviewDefault: { tier: "frontier" as "normal" } } }),
+			),
+		).toContainEqual(expect.stringContaining("`frontier` is adjudication"));
+	});
+
+	it("refuses the v9 tiers as unknown, by name", () => {
+		for (const gone of ["standard", "heavy"])
+			expect(
+				errorsOf(reviewed([{ lens: "security", tier: gone as "normal" }])),
+			).toEqual([
+				`api.reviews[0]: \`${gone}\` is not a review tier — one of light, normal`,
+			]);
+	});
+
+	it("splits the router's four tiers between lenses and refusals, leaving none", () => {
+		expect(
+			[...REVIEW_TIERS, ...Object.keys(REFUSED_REVIEW_TIERS)].sort(),
+		).toEqual([...TIER_IDS].sort());
+		expect(resolvePolicy().reviewDefault.tier).toBe("normal");
 	});
 
 	// The two questions only the session can answer, asked where the routing is
@@ -428,7 +489,7 @@ describe("what a policy may not say", () => {
 			expect.stringContaining("`resumes` is 0 or 1"),
 		);
 		expect(
-			policied({ reviewDefault: { tier: "exhaustive" as "heavy" } }),
+			policied({ reviewDefault: { tier: "exhaustive" as "normal" } }),
 		).toContainEqual(expect.stringContaining("is not a review tier"));
 		expect(policied({ publish: { mode: "merge" as "pr" } })).toContainEqual(
 			expect.stringContaining("is not a publication mode"),
@@ -460,7 +521,7 @@ describe("what a policy may not say", () => {
 		expect(
 			policied({
 				gates: "every-deliverable",
-				reviewDefault: { tier: "heavy", diverse: true },
+				reviewDefault: { tier: "normal", diverse: true },
 				resumes: 0,
 				publish: { mode: "branch", base: "main" },
 			}),
@@ -506,7 +567,7 @@ describe("the digest covers the new fields", () => {
 		const after = reviewed([{ lens: "security" }]);
 		expect(planDigest(after)).not.toBe(planDigest(before));
 		expect(
-			planDigest(reviewed([{ lens: "security", tier: "heavy" }])),
+			planDigest(reviewed([{ lens: "security", tier: "normal" }])),
 		).not.toBe(planDigest(after));
 	});
 
@@ -565,8 +626,8 @@ describe("reviews and policy survive the store", () => {
 					reads: [],
 					tasks: [task("build"), task("tests")],
 					reviews: [
-						{ lens: "contracts", tier: "heavy", diverse: true },
-						{ lens: "replay", tier: "standard" },
+						{ lens: "contracts", tier: "normal", diverse: true },
+						{ lens: "replay", tier: "light" },
 					],
 				},
 			],
@@ -619,7 +680,7 @@ describe("reviews and policy survive the store", () => {
 		expect(text).toContain("gates ship");
 		expect(text).toContain("publish pr from main");
 		expect(text).toContain("Why the arc is worth building.");
-		expect(text).toContain("read by contracts, tier heavy, diverse");
+		expect(text).toContain("read by contracts, tier normal, diverse");
 		expect(text).toContain("stages (derived):");
 		expect(text).toContain("implement — implement");
 		expect(text).toContain(
@@ -627,7 +688,7 @@ describe("reviews and policy survive the store", () => {
 		);
 		expect(text).toContain("check — check, beside the review");
 		expect(text).toContain(
-			"review — review-fan-out over contracts (tier heavy, diverse), replay (tier standard)",
+			"review — review-fan-out over contracts (tier normal, diverse), replay (tier light)",
 		);
 		expect(text).toContain("normalize — normalize");
 		expect(text).toContain(
@@ -635,6 +696,9 @@ describe("reviews and policy survive the store", () => {
 		);
 		expect(text).toContain(
 			"recheck — check, of the resumed implementer's hand-off",
+		);
+		expect(text).toContain(
+			"adjudicate — adjudicate, a judge of another family rules upheld, overruled or undecidable on each contested finding",
 		);
 		expect(text).not.toContain("verify-and-fix");
 		expect(text).not.toContain("synthesis");
@@ -646,7 +710,7 @@ describe("reviews and policy survive the store", () => {
 			"Policy (the plan sets none — these are the defaults)",
 		);
 		expect(text).toContain(
-			"review — review-fan-out over security (tier standard)",
+			"review — review-fan-out over security (tier normal)",
 		);
 	});
 });
@@ -658,20 +722,20 @@ describe("reviews and policy survive the store", () => {
 // document and not a default applied on the way to a compiler: two compilers
 // read this plan, and an undefined field is where they disagreed.
 
-describe("writing `diverse` onto every heavy reviewer", () => {
-	it("fills in every undecided heavy review, and only those", () => {
+describe("writing `diverse` onto every `normal` reviewer", () => {
+	it("fills in every undecided `normal` review, and only those", () => {
 		const subject = plan({
 			deliverables: [
 				deliverable("api", {
 					reviews: [
-						{ lens: "security", tier: "heavy" },
-						{ lens: "contracts", tier: "heavy", diverse: false },
-						{ lens: "tests", tier: "standard" },
+						{ lens: "security", tier: "normal" },
+						{ lens: "contracts", tier: "normal", diverse: false },
+						{ lens: "tests", tier: "light" },
 					],
 				}),
 				deliverable("web", {
 					reviews: [
-						{ lens: "risk", tier: "heavy" },
+						{ lens: "risk", tier: "normal" },
 						{ lens: "replay", tier: "light" },
 					],
 				}),
@@ -680,7 +744,7 @@ describe("writing `diverse` onto every heavy reviewer", () => {
 
 		const next = withExplicitDiverse(subject);
 		if (!next)
-			throw new Error("a heavy reviewer with no answer was not filled in");
+			throw new Error("a `normal` reviewer with no answer was not filled in");
 		expect(next.deliverables[0]?.reviews?.map((r) => r.diverse)).toEqual([
 			true,
 			// Already answered, and answering it again would overrule the author.
@@ -688,7 +752,7 @@ describe("writing `diverse` onto every heavy reviewer", () => {
 			undefined,
 		]);
 		expect(next.deliverables[1]?.reviews).toEqual([
-			{ lens: "risk", tier: "heavy", diverse: true },
+			{ lens: "risk", tier: "normal", diverse: true },
 			{ lens: "replay", tier: "light" },
 		]);
 		// The input is untouched: the caller decides whether to store the result.
@@ -705,13 +769,13 @@ describe("writing `diverse` onto every heavy reviewer", () => {
 
 	it("reaches the compiled stage list, which is the point of writing it down", () => {
 		const next = withExplicitDiverse(
-			reviewed([{ lens: "security", tier: "heavy" }]),
+			reviewed([{ lens: "security", tier: "normal" }]),
 		);
 		if (!next) throw new Error("nothing was written down");
 		const stages = withDefaultStages(next).deliverables[0]?.stages;
 		const review = stages?.find((stage) => stage.use === "review-fan-out");
 		expect(review).toMatchObject({
-			lenses: [{ id: "security", tier: "heavy", diverse: true }],
+			lenses: [{ id: "security", tier: "normal", diverse: true }],
 		});
 	});
 });

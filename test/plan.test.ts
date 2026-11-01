@@ -302,7 +302,7 @@ describe("reviews are workflow-native review launches", () => {
 				plan({
 					deliverables: [
 						deliverable("a", {
-							reviews: [{ lens: "security", tier: "heavy", diverse: true }],
+							reviews: [{ lens: "security", tier: "normal", diverse: true }],
 						}),
 					],
 				}),
@@ -341,7 +341,7 @@ describe("a review names a model, a tier, or neither", () => {
 				plan({
 					deliverables: [
 						deliverable("a", {
-							reviews: [{ lens: "security", tier: "heavy", diverse: true }],
+							reviews: [{ lens: "security", tier: "normal", diverse: true }],
 						}),
 					],
 				}),

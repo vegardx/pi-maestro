@@ -237,13 +237,14 @@ describe("the one place the runtime's field names are read", () => {
 		).toMatchObject({ kind: "gate", stage: "ship", deliverable: WHOLE_RUN });
 	});
 
-	it("knows the nine kinds pi-workflow 5 derives, and no `fix`", () => {
+	it("knows the ten kinds pi-workflow 8 derives, and no `fix`", () => {
 		expect([...NARRATED_TASK_KINDS]).toEqual([
 			"implement",
 			"check",
 			"review",
 			"normalize",
 			"resume",
+			"adjudicate",
 			"synthesis",
 			"gate",
 			"refine",
@@ -352,8 +353,8 @@ describe("the line and the turn", () => {
 			expect([kind, needsTurn(of({ kind }))]).toEqual([kind, false]);
 	});
 
-	it("gives a turn to a normalize, a resume and the ship gate", () => {
-		for (const kind of ["normalize", "resume", "gate"] as const)
+	it("gives a turn to a normalize, a resume, an adjudication and the ship gate", () => {
+		for (const kind of ["normalize", "resume", "adjudicate", "gate"] as const)
 			expect([kind, needsTurn(of({ kind }))]).toEqual([kind, true]);
 	});
 
@@ -611,6 +612,28 @@ describe("the runs this seat narrates", () => {
 		);
 		expect(n.content()).not.toContain("I fixed everything");
 		expect(n.content().endsWith(REVIEW_SENTENCE)).toBe(true);
+	});
+
+	it("speaks at adjudicate from the journal, never from the judge's words", async () => {
+		const n = narrator({
+			summaries: { "a-1": '{"verdicts":[{"id":"c1","verdict":"upheld"}]}' },
+			tasks: REVIEWERS,
+		});
+		n.observe(
+			settled("a-1", {
+				stage: "adjudicate-d1",
+				taskKind: "adjudicate",
+				deliverable: "d1",
+			}),
+		);
+		await n.flush();
+		expect(n.delivery()?.triggerTurn).toBe(true);
+		expect(n.content().split("\n")).toEqual([
+			"compose · d1 · adjudicate adjudicate-d1 — A judge from another model family, which saw the change and each contested finding beside the implementer's reasoning, ruled each one upheld, overruled or undecidable; the rulings are recorded in `reviews-d1` and never hold the run.",
+			"",
+			REVIEW_SENTENCE,
+		]);
+		expect(n.content()).not.toContain("verdicts");
 	});
 
 	it("says a resume with nobody reviewing answered the check alone", async () => {

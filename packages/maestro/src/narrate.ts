@@ -273,8 +273,8 @@ function reviewerName(task: InspectedTask): string {
 }
 
 /**
- * What the journal proves about a deliverable's review, at normalize or at
- * resume, or nothing for any other kind.
+ * What the journal proves about a deliverable's review, at normalize, at resume
+ * or at adjudicate, or nothing for any other kind.
  *
  * Built from task statuses alone: which `review` tasks of the deliverable
  * completed and which did not. The record's clusters and dispositions are not
@@ -285,6 +285,11 @@ export function reviewFacts(
 	narration: Narration,
 	tasks: readonly InspectedTask[],
 ): string | undefined {
+	if (narration.kind === "adjudicate")
+		return (
+			"A judge from another model family, which saw the change and each contested finding beside the implementer's reasoning, ruled each one upheld, overruled or undecidable;" +
+			` the rulings are recorded in \`reviews-${narration.deliverable}\` and never hold the run.`
+		);
 	if (narration.kind !== "normalize" && narration.kind !== "resume")
 		return undefined;
 	const reviewers = tasks.filter(
@@ -321,6 +326,7 @@ export function reviewFacts(
 const TURN_KINDS: ReadonlySet<NarrationKind> = new Set<NarrationKind>([
 	"normalize",
 	"resume",
+	"adjudicate",
 	"gate",
 ]);
 
@@ -368,9 +374,9 @@ export function shipGateSentence(runId: string): string {
 export const FAILURE_SENTENCE =
 	"Tell the person what failed and what it means for the rest of the plan. A dialog is open about it: retry that task, stop the run, or go back to planning.";
 
-/** What the model is told at a normalize or a resume. */
+/** What the model is told at a normalize, a resume or an adjudication. */
 export const REVIEW_SENTENCE =
-	"Tell the person where the review of that deliverable stands. Every finding, who raised it, how many agreed and how the implementer answered it reach the ship decision, where Look first lists them.";
+	"Tell the person where the review of that deliverable stands. Every finding, who raised it, how many agreed, how the implementer answered it and how the judge ruled on what it contested reach the ship decision, where Look first lists them.";
 
 /** A run that reached a terminal state, and whether a gate ever asked anything. */
 export function renderRunEnd(
@@ -508,7 +514,7 @@ export function createRunNarrator(deps: NarrateDeps): RunNarrator {
 		}
 		const filled = narrations.map((entry) => {
 			const inspection = inspections.get(entry.runId);
-			// At normalize and resume the journal speaks, never the child: see
+			// At normalize, resume and adjudicate the journal speaks, never the child: see
 			// `reviewFacts`. Everywhere else the task's own summary is the line.
 			const summary = inspection
 				? (reviewFacts(entry.narration, inspection.tasks) ??

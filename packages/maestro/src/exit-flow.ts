@@ -1176,9 +1176,9 @@ export async function runExitFlow(
 			return { kind: "refused", problem };
 		};
 
-		// Normalisation — heavy implies diverse, written down.
+		// Normalisation — `normal` implies diverse, written down.
 		//
-		// Before anything reads this document. A heavy lens whose `diverse` is
+		// Before anything reads this document. A `normal` lens whose `diverse` is
 		// undefined is a question two compilers answered differently; writing the
 		// answer into the STORED plan settles it in the one place a receipt can be
 		// checked against, and it is the document the digest covers.
@@ -1187,14 +1187,14 @@ export async function runExitFlow(
 			const report = inspect(explicit);
 			if (report.errors.length > 0)
 				return refuse(
-					`Writing \`diverse\` onto this plan's heavy reviewers produced a plan that no longer validates, which is a bug in this seat:\n${report.errors
+					`Writing \`diverse\` onto this plan's \`normal\` reviewers produced a plan that no longer validates, which is a bug in this seat:\n${report.errors
 						.map((error) => `  - ${error}`)
 						.join("\n")}`,
 				);
 			const saved = savePlanOrReport(store, explicit, dialogs);
 			if (!saved)
 				return refuse(
-					"This plan's heavy reviewers could not be written down, so the hand-off stops here rather than offering a plan the run would not reproduce.",
+					"This plan's `normal` reviewers could not be written down, so the hand-off stops here rather than offering a plan the run would not reproduce.",
 				);
 			plan = saved;
 		}

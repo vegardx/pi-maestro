@@ -86,7 +86,7 @@ function plan(slug: string, root: string, title = `Plan ${slug}`): Plan {
 				reviews: [
 					{
 						lens: "security",
-						tier: "heavy",
+						tier: "normal",
 						diverse: true,
 						model: "anthropic/claude",
 					},
@@ -275,7 +275,7 @@ describe("/plan show", () => {
 		expect(message).toContain("after api");
 		expect(message).toContain("- handler: Write the handler");
 		expect(message).toContain(
-			"read by security, tier heavy, diverse, model anthropic/claude",
+			"read by security, tier normal, diverse, model anthropic/claude",
 		);
 	});
 

@@ -13,6 +13,7 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import type { TierId } from "@vegardx/pi-models";
 
 /**
  * The revision of the stored plan document. Re-exported by `store.ts`, which
@@ -49,10 +50,19 @@ import { resolve } from "node:path";
  * `out-of-scope`, and is checked again; `policy.resumes` (0 or 1, default 1) is
  * whether that happens. A decline is an answer a person reads at the gate,
  * never a reason to hold the run. `maxFixRounds` is refused by name.
+ * Version 10 renamed the review tiers to the router's own vocabulary: a lens is
+ * `light` or `normal` (the default), and the old `standard` and `heavy` are not
+ * tiers any more. `fast` and `frontier` are tiers, and refused on a lens by
+ * name: `fast` executes and never decides, and `frontier` is adjudication and
+ * synthesis only. Version 10 also compiles an `adjudicate` stage after the
+ * recheck of every reviewed deliverable that resumes its implementer: a judge
+ * from another family rules on what the implementer contested. A stored v9
+ * plan's `standard` or `heavy` would compile to a tier nothing routes, so the
+ * envelope moves and the old one is refused.
  * Nothing before the current version is readable, and nothing tries to be:
  * there is no migration path here on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 9 as const;
+export const MAESTRO_SCHEMA_VERSION = 10 as const;
 
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
@@ -165,10 +175,29 @@ export interface Review {
 	readonly diverse?: boolean;
 }
 
-/** How much reviewer a lens is worth, in the vocabulary a host can route. */
-export const REVIEW_TIERS = ["light", "standard", "heavy"] as const;
+/**
+ * How much reviewer a lens is worth, in the router's own tier vocabulary.
+ *
+ * Two of the router's four tiers, and the same two pi-workflow's
+ * `AUTHORED_REVIEW_TIERS` admits: a plan pi-workflow refuses at start is a plan
+ * this check should have refused while it was being written.
+ */
+export const REVIEW_TIERS = ["light", "normal"] as const;
 
 export type ReviewTier = (typeof REVIEW_TIERS)[number];
+
+/**
+ * The router's other two tiers, refused on a lens BY NAME, with the reason.
+ *
+ * Typed against the router's `TierId` so that a tier added there is a type
+ * error here until somebody decides whether a lens may name it: every tier is
+ * either a review tier or refused for a stated reason, never silently neither.
+ */
+export const REFUSED_REVIEW_TIERS = Object.freeze({
+	fast: "`fast` executes and never decides, so it is never a review lens",
+	frontier:
+		"`frontier` is adjudication and synthesis only — it judges what the implementer contested — never a review lens",
+} as const satisfies Record<Exclude<TierId, ReviewTier>, string>);
 
 /** Work. All of it: implementation, tests, docs. There is no other kind. */
 export interface Task {
@@ -193,6 +222,7 @@ export const STAGE_KINDS = [
 	"review-fan-out",
 	"normalize",
 	"resume",
+	"adjudicate",
 ] as const;
 
 export type StageKind = (typeof STAGE_KINDS)[number];
@@ -262,12 +292,23 @@ export interface ResumeStage {
 	readonly id: string;
 }
 
+/**
+ * One read-only judge from another family over the clusters the resumed
+ * implementer contested, ruling `upheld`, `overruled` or `undecidable` on
+ * each. It answers nobody and never holds the run.
+ */
+export interface AdjudicateStage {
+	readonly use: "adjudicate";
+	readonly id: string;
+}
+
 export type Stage =
 	| ImplementStage
 	| CheckStage
 	| ReviewFanOutStage
 	| NormalizeStage
-	| ResumeStage;
+	| ResumeStage
+	| AdjudicateStage;
 
 export interface Deliverable {
 	readonly id: string;
@@ -391,7 +432,7 @@ export function gateStops(gates: PlanGates): string {
 	return "it works through the plan and stops at its `ship` decision";
 }
 
-export const DEFAULT_REVIEW_TIER: ReviewTier = "standard";
+export const DEFAULT_REVIEW_TIER: ReviewTier = "normal";
 
 export const DEFAULT_PUBLISH_MODE: PublishMode = "none";
 
@@ -456,7 +497,9 @@ export function resolvePolicy(policy?: PlanPolicy): ResolvedPolicy {
  * is the derivation, and the run a person approves is the run this function
  * says. It is pi-workflow's `derivedStagesFor`, field for field: implement and
  * check; then, with reviews, the fan-out and the normalize step; then, under
- * `resumes: 1`, the resume and the recheck. The review stages are omitted
+ * `resumes: 1`, the resume and the recheck, and — with reviews too — the
+ * adjudication of what the implementer contested. With `resumes: 0` nothing is
+ * contested, so nothing is adjudicated. The review stages are omitted
  * rather than declared empty when the deliverable lists no reviews — a fan-out
  * over zero lenses is not a cheaper review, it is a stage that cannot be
  * compiled — while the resume stays, because a failing check is something to
@@ -482,11 +525,13 @@ export function defaultStagesFor(
 			{ use: "review-fan-out", id: "review", lenses },
 			{ use: "normalize", id: "normalize" },
 		);
-	if (policy.resumes === 1)
+	if (policy.resumes === 1) {
 		stages.push(
 			{ use: "resume", id: "resume" },
 			{ use: "check", id: "recheck" },
 		);
+		if (lenses.length > 0) stages.push({ use: "adjudicate", id: "adjudicate" });
+	}
 	return stages;
 }
 
@@ -510,9 +555,9 @@ export function withDefaultStages(plan: Plan): StagedPlan {
 }
 
 /**
- * The plan with every heavy reviewer's `diverse` written down.
+ * The plan with every `normal` reviewer's `diverse` written down.
  *
- * WHY THIS IS A REWRITE AND NOT A DEFAULT. A heavy lens reads the same work the
+ * WHY THIS IS A REWRITE AND NOT A DEFAULT. A `normal` lens reads the same work the
  * implementer wrote; a reviewer from another model family fails differently,
  * which is the entire point of a second opinion. Both compilers — pi-maestro's
  * `compileStageDocument` and pi-workflow's `plan-to-ship` — agree on that, and
@@ -522,8 +567,8 @@ export function withDefaultStages(plan: Plan): StagedPlan {
  * exit does this once, before it compiles anything, so what the human reviews
  * and what the run executes are the same document.
  *
- * Only `undefined` is filled in. A plan that says `diverse: false` on a heavy
- * lens has answered the question, and answering it again would be the flow
+ * Only `undefined` is filled in. A plan that says `diverse: false` on a
+ * `normal` lens has answered the question, and answering it again would be the flow
  * overruling the author.
  *
  * Returns `undefined` when there was nothing to write, so a caller does not
@@ -534,7 +579,7 @@ export function withExplicitDiverse(plan: Plan): Plan | undefined {
 	const deliverables = plan.deliverables.map((deliverable) => {
 		if (!deliverable.reviews) return deliverable;
 		const reviews = deliverable.reviews.map((review) => {
-			if (review.tier !== "heavy" || review.diverse !== undefined)
+			if (review.tier !== "normal" || review.diverse !== undefined)
 				return review;
 			changed = true;
 			return { ...review, diverse: true };
@@ -896,12 +941,15 @@ function validateReviewRouting(
 				`${at}: \`${routing.model}\` is not a model this host has — ${providerList(host)}. \`model\` is optional: drop it and pin \`tier\` instead unless the reviewer must be one exact model`,
 			);
 	}
+	const tier: unknown = routing.tier;
 	if (
-		routing.tier !== undefined &&
-		!(REVIEW_TIERS as readonly string[]).includes(routing.tier)
+		tier !== undefined &&
+		!(REVIEW_TIERS as readonly unknown[]).includes(tier)
 	)
 		errors.push(
-			`${at}: \`${routing.tier}\` is not a review tier — one of ${REVIEW_TIERS.join(", ")}`,
+			typeof tier === "string" && Object.hasOwn(REFUSED_REVIEW_TIERS, tier)
+				? `${at}: ${REFUSED_REVIEW_TIERS[tier as keyof typeof REFUSED_REVIEW_TIERS]} — author it at ${REVIEW_TIERS.join(" or ")}`
+				: `${at}: \`${String(tier)}\` is not a review tier — one of ${REVIEW_TIERS.join(", ")}`,
 		);
 	if (routing.diverse !== undefined && typeof routing.diverse !== "boolean")
 		errors.push(`${at}: \`diverse\` is true or false`);

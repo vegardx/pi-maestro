@@ -212,6 +212,8 @@ function renderStage(stage: Stage): string {
 			return `${stage.id} — normalize, the findings clustered by place; a model may only merge`;
 		case "resume":
 			return `${stage.id} — resume, the implementer answers each finding fixed, declined or out-of-scope`;
+		case "adjudicate":
+			return `${stage.id} — adjudicate, a judge of another family rules upheld, overruled or undecidable on each contested finding`;
 	}
 }
 

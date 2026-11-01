@@ -466,7 +466,11 @@ describe("what the schema will not let an author say", () => {
 		// Routable review intent: a tier and a family request, neither of which
 		// pins the plan to a host that happens to have one exact model.
 		expect(schema).toContain("tier");
-		expect(schema).toContain("heavy");
+		expect(schema).toContain('"normal"');
+		// The router's other two tiers are not lens tiers, and the schema does
+		// not offer them.
+		expect(schema).not.toContain('"fast"');
+		expect(schema).not.toContain('"frontier"');
 		expect(schema).toContain("diverse");
 		expect(schema).not.toContain("persona");
 		expect(schema).not.toContain('"agent"');

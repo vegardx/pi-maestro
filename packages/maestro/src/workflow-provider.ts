@@ -125,6 +125,7 @@ export const NARRATED_TASK_KINDS = [
 	"review",
 	"normalize",
 	"resume",
+	"adjudicate",
 	"synthesis",
 	"gate",
 	"refine",

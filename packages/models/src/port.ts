@@ -17,7 +17,7 @@ import type { ThinkingLevel } from "./thinking.js";
  * literal in a test.
  */
 export interface CatalogModel {
-	/** False when the model does no reasoning at all; only `off` is supported. */
+	/** Absent or false: the model does no reasoning; only `off` is supported. */
 	readonly reasoning?: boolean;
 	/** Pi's level map; a `null` entry means the level is explicitly unsupported. */
 	readonly thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;

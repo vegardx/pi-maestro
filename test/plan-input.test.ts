@@ -31,7 +31,7 @@ const fixture: Plan = {
 				{ id: "build", title: "Build it" },
 				{ id: "test", title: "Test it" },
 			],
-			reviews: [{ lens: "security", tier: "heavy", diverse: true }],
+			reviews: [{ lens: "security", tier: "normal", diverse: true }],
 		},
 		{
 			id: "ui",
@@ -163,7 +163,7 @@ describe("the workflow input", () => {
 			...fixture,
 			policy: {
 				gates: "ship",
-				reviewDefault: { tier: "standard", diverse: false },
+				reviewDefault: { tier: "light", diverse: false },
 				resumes: 0,
 				publish: { mode: "pr", base: "main" },
 			},
@@ -172,7 +172,7 @@ describe("the workflow input", () => {
 					...(fixture.deliverables[0] as Plan["deliverables"][number]),
 					reviews: [
 						{ lens: "correctness", tier: "light" },
-						{ lens: "correctness", tier: "heavy", diverse: true },
+						{ lens: "correctness", tier: "normal", diverse: true },
 					],
 				},
 			],

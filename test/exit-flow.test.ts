@@ -362,14 +362,14 @@ function documentText(over: Record<string, unknown> = {}): string {
 				id: "d1",
 				title: "Deliverable one",
 				tasks: [{ id: "impl", title: "Do the work" }],
-				reviews: [{ lens: "contracts", tier: "standard" }],
+				reviews: [{ lens: "contracts", tier: "light" }],
 			},
 			{
 				id: "d2",
 				title: "Deliverable two",
 				after: ["d1"],
 				tasks: [{ id: "impl", title: "Do the other work" }],
-				reviews: [{ lens: "contracts", tier: "standard" }],
+				reviews: [{ lens: "contracts", tier: "light" }],
 			},
 		],
 		...over,
@@ -572,7 +572,7 @@ describe("the hand-off, from `/mode ask` or `/mode auto` to a run", () => {
 		expect(body.startsWith(`${START_TITLE}\n\n${DESCRIPTION}`)).toBe(true);
 		expect(body).toContain("`compose` — 2 deliverables, gates none.");
 		expect(body).toContain("  d1 — Deliverable one\n      impl: Do the work");
-		expect(body).toContain("      read by contracts (tier standard)");
+		expect(body).toContain("      read by contracts (tier light)");
 		expect(body).toContain("  d2 — Deliverable two, after d1");
 		expect(body).toContain(FULLY_EQUIPPED.why);
 		expect(body).toContain("Plan check: `gaps` — 1 minor.");
@@ -1015,7 +1015,7 @@ describe("the document the harness asks for", () => {
 			after: [],
 			reads: [],
 			tasks: [{ id: "impl", title: "Do the work" }],
-			reviews: [{ lens: "contracts", tier: "standard" }],
+			reviews: [{ lens: "contracts", tier: "light" }],
 		});
 		expect(stored).not.toHaveProperty("stages");
 		expect(validatePlan(stored as Plan, cleanProbe)).toEqual([]);
@@ -1818,7 +1818,7 @@ describe("renderPlanSummary", () => {
 		);
 		expect(summary).toContain("2 deliverables, gates ship");
 		expect(summary).toContain("impl: Do the work");
-		expect(summary).toContain("read by contracts (tier standard)");
+		expect(summary).toContain("read by contracts (tier light)");
 		expect(summary).not.toContain("verify-and-fix");
 		expect(summary).not.toContain("review-fan-out");
 	});

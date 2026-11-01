@@ -389,7 +389,7 @@ export function startSeat(
 		// second reader of the same directory.
 		store: () => seat().store,
 		// The same host the store was given. The hand-off re-validates what it
-		// rewrites — `diverse` written onto heavy lenses, every rewrite the plan
+		// rewrites — `diverse` written onto `normal` lenses, every rewrite the plan
 		// check asks for — and a reading without the host would refuse the pinned
 		// model the store had just accepted.
 		...(options.host

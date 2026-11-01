@@ -707,8 +707,8 @@ describe("explicit effort", () => {
 
 // ─── other-family ────────────────────────────────────────────────────────────
 // The model selector for a DIRECT (non-fanned) spawn. `other-family` walks the
-// allowance's tiers in order and takes the first available entry whose family
-// differs from the caller's — a reviewer never marks its own homework. With
+// requested tier — or, with none, the allowance's tiers in order — and takes the
+// first available entry whose family differs from the caller's — a reviewer never marks its own homework. With
 // nowhere to go it falls back to inherit WITH a fallbackReason, never silently.
 
 describe("resolveOtherFamily", () => {
@@ -797,6 +797,64 @@ describe("resolveOtherFamily", () => {
 		expect(resolution.fallbackReason).toContain("no model outside family");
 	});
 
+	it("walks only the requested tier, never a cheaper one", () => {
+		// The allowance walk would answer Kimi from light; frontier was asked.
+		const resolution = router({ settings: OTHER_FAMILY }).resolveOtherFamily({
+			persona: "code-review",
+			tier: "frontier",
+			inherit: { modelId: "gw1/sol" },
+		});
+		expect(resolution).toMatchObject({
+			source: "tier",
+			modelId: "gw1/opus",
+			family: "Anthropic",
+			tier: "frontier",
+		});
+	});
+
+	it("inherits with a reason naming the tier when it holds no foreign family", () => {
+		// frontier holds only Anthropic; light's OpenAI and Moonshot are not
+		// consulted, because a frontier ask answered from light would be silent.
+		const resolution = router({ settings: OTHER_FAMILY }).resolveOtherFamily({
+			persona: "code-review",
+			tier: "frontier",
+			inherit: { modelId: "gw1/opus", effort: "high" },
+		});
+		expect(resolution).toMatchObject({
+			source: "inherit",
+			modelId: "gw1/opus",
+			effort: "high",
+		});
+		expect(resolution.tier).toBeUndefined();
+		expect(resolution.fallbackReason).toBe(
+			"no model outside family Anthropic is available in tier frontier for persona code-review",
+		);
+	});
+
+	it("refuses a requested tier outside the allowance, as resolve does", () => {
+		expect(() =>
+			router({ settings: OTHER_FAMILY }).resolveOtherFamily({
+				persona: "code-review",
+				tier: "fast",
+				inherit: { modelId: "gw1/sol" },
+			}),
+		).toThrow(/outside persona code-review's allowance/);
+	});
+
+	it("refuses a requested tier with no active binding rather than inheriting", () => {
+		const unbound = settingsWith({
+			bindings: { main: { targets: ["gw9/other"], roster: "daily" } },
+			allowances: { "code-review": { tiers: ["light", "frontier"] } },
+		});
+		expect(() =>
+			router({ settings: unbound }).resolveOtherFamily({
+				persona: "code-review",
+				tier: "light",
+				inherit: { modelId: "gw1/sol" },
+			}),
+		).toThrow(/no binding is active/);
+	});
+
 	it("falls back with a reason when the caller's family is unknown", () => {
 		const configured = router({ settings: OTHER_FAMILY });
 		// No inherit at all: nothing to differ from — do not guess.
@@ -848,6 +906,25 @@ describe("resolveFamily", () => {
 			family: "Anthropic",
 			tier: "frontier",
 		});
+	});
+
+	it("walks only the requested tier, the same rule as other-family", () => {
+		const r = router();
+		expect(
+			r.resolveFamily({
+				persona: "deliverable-worker",
+				family: "Moonshot",
+				tier: "light",
+			}),
+		).toMatchObject({ modelId: "gw2/kimi", tier: "light" });
+		// Anthropic lives in frontier only: a light ask is refused, not promoted.
+		expect(() =>
+			r.resolveFamily({
+				persona: "deliverable-worker",
+				family: "Anthropic",
+				tier: "light",
+			}),
+		).toThrow(/no available model in family Anthropic at tier light/);
 	});
 
 	it("refuses an unknown family, naming what the roster reaches", () => {
@@ -914,6 +991,29 @@ describe("resolveForRole", () => {
 				inherit: { modelId: "gw1/sol" },
 			}),
 		).toMatchObject({ family: "Moonshot", modelId: "gw2/kimi" });
+	});
+
+	it("routes family: 'other' at the tier the caller named", () => {
+		const r = router({
+			settings: settingsWith({
+				allowances: { "code-review": { tiers: ["light", "frontier"] } },
+			}),
+		});
+		expect(
+			r.resolveForRole("code-review", {
+				tier: "frontier",
+				family: "other",
+				inherit: { modelId: "gw1/sol" },
+			}),
+		).toMatchObject({ tier: "frontier", modelId: "gw1/opus" });
+		// A tier outside the allowance is refused, not walked around.
+		expect(
+			r.resolveForRole("code-review", {
+				tier: "fast",
+				family: "other",
+				inherit: { modelId: "gw1/sol" },
+			}),
+		).toBeNull();
 	});
 
 	it("routes a named family through the family walk", () => {

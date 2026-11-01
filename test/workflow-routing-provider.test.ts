@@ -176,16 +176,19 @@ describe("the routing port", () => {
 		expect(`${lens.provider}/${lens.id}`).toBe(OTHER_NORMAL);
 	});
 
-	// The router walks the persona's whole allowance for another family, so the
-	// tier it reached is the evidence, not the tier that was asked.
-	it("reports the tier the router reached, not the one asked", () => {
+	// The router walks only the tier asked for another family: light holds only
+	// the seat's family, so the lens inherits the seat and says which tier it
+	// searched, rather than quietly answering from normal.
+	it("inherits with a reason when the tier asked holds no other family", () => {
 		const lens = resolved(port(), {
 			persona: "code-review",
 			tier: "light",
 			family: "other",
 		});
-		expect(`${lens.provider}/${lens.id}`).toBe(OTHER_NORMAL);
-		expect(lens.tier).toBe("normal");
+		expect(`${lens.provider}/${lens.id}`).toBe(SEAT);
+		expect(lens.source).toBe("inherit");
+		expect(lens.tier).toBeUndefined();
+		expect(lens.fallbackReason).toMatch(/in tier light/);
 	});
 
 	it("refuses a tier outside the persona's allowance by name", () => {

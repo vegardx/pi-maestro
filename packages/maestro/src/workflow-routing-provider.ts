@@ -194,8 +194,8 @@ export function createMaestroRoutingPort(
 				thinking,
 				source: resolution.source,
 				...(persona ? { persona } : {}),
-				// The tier the router actually reached, which an `other`-family
-				// request walking the persona's allowance may not be the one asked.
+				// The tier the router reached: the one asked on a tier pick, and
+				// absent when an `other`-family request degraded to the seat.
 				...(resolution.tier ? { tier: resolution.tier } : {}),
 				...(family ? { family } : {}),
 				...(alias ? { alias } : {}),

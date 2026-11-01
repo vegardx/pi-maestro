@@ -8,6 +8,9 @@
 				"lens": "correctness",
 				"model": "anthropic/claude-haiku-4-5",
 				"thinking": "low",
+				"alias": "Haiku",
+				"tier": "light",
+				"family": "Anthropic",
 				"attemptId": "att-correctness-light",
 				"status": "reported",
 				"findings": 2
@@ -17,17 +20,35 @@
 				"lens": "correctness",
 				"model": "anthropic/claude-opus-4-5",
 				"thinking": "high",
-				"attemptId": "att-correctness-heavy",
+				"alias": "Opus",
+				"tier": "normal",
+				"family": "Anthropic",
+				"attemptId": "att-correctness-normal",
 				"status": "reported",
-				"findings": 2
+				"findings": 3
 			},
 			{
 				"reviewerKey": "ac687411060516e58a4ce4f6f9b737a55c75421b6ba0287c54a66483904969bd",
 				"lens": "security",
 				"model": "openai/gpt-5",
 				"thinking": "medium",
+				"alias": "GPT",
+				"tier": "normal",
+				"family": "OpenAI",
 				"status": "failed",
 				"findings": 0
+			},
+			{
+				"reviewerKey": "d14b0d9b6d718eea614a2f054ffaaf33359d3533ae44970c941954b7bdc328ba",
+				"lens": "hygiene",
+				"model": "anthropic/claude-haiku-4-5",
+				"thinking": "off",
+				"alias": "Haiku",
+				"tier": "fast",
+				"family": "Anthropic",
+				"attemptId": "att-hygiene-fast",
+				"status": "reported",
+				"findings": 1
 			}
 		],
 		"clusters": [
@@ -43,13 +64,16 @@
 						"lens": "correctness",
 						"model": "anthropic/claude-opus-4-5",
 						"thinking": "high",
-						"attemptId": "att-correctness-heavy",
+						"alias": "Opus",
+						"tier": "normal",
+						"family": "Anthropic",
+						"attemptId": "att-correctness-normal",
 						"findingIndex": 1
 					}
 				],
 				"agreement": {
 					"count": 1,
-					"of": 2
+					"of": 3
 				},
 				"suggestions": [],
 				"raw": [
@@ -61,6 +85,15 @@
 				"disposition": {
 					"kind": "out-of-scope",
 					"reasoning": "The README is rewritten by the docs deliverable."
+				},
+				"adjudication": {
+					"verdict": "overruled",
+					"reasoning": "The docs deliverable rewrites the README, so the stale flag name is its to fix.",
+					"model": "openai/gpt-5-pro",
+					"thinking": "high",
+					"alias": "GPT Pro",
+					"tier": "frontier",
+					"family": "OpenAI"
 				}
 			},
 			{
@@ -76,6 +109,9 @@
 						"lens": "correctness",
 						"model": "anthropic/claude-haiku-4-5",
 						"thinking": "low",
+						"alias": "Haiku",
+						"tier": "light",
+						"family": "Anthropic",
 						"attemptId": "att-correctness-light",
 						"findingIndex": 0
 					},
@@ -83,13 +119,16 @@
 						"lens": "correctness",
 						"model": "anthropic/claude-opus-4-5",
 						"thinking": "high",
-						"attemptId": "att-correctness-heavy",
+						"alias": "Opus",
+						"tier": "normal",
+						"family": "Anthropic",
+						"attemptId": "att-correctness-normal",
 						"findingIndex": 0
 					}
 				],
 				"agreement": {
 					"count": 2,
-					"of": 2
+					"of": 3
 				},
 				"suggestions": [
 					"Bound the loop with the configured attempt count."
@@ -111,6 +150,51 @@
 			},
 			{
 				"id": "c4",
+				"claim": "The error message includes the full request URL, query string and all.",
+				"location": {
+					"file": "src/client.ts",
+					"line": 80
+				},
+				"severity": "medium",
+				"reportedBy": [
+					{
+						"lens": "correctness",
+						"model": "anthropic/claude-opus-4-5",
+						"thinking": "high",
+						"alias": "Opus",
+						"tier": "normal",
+						"family": "Anthropic",
+						"attemptId": "att-correctness-normal",
+						"findingIndex": 2
+					}
+				],
+				"agreement": {
+					"count": 1,
+					"of": 3
+				},
+				"suggestions": [],
+				"raw": [
+					{
+						"reviewerIndex": 1,
+						"findingIndex": 2
+					}
+				],
+				"disposition": {
+					"kind": "declined",
+					"reasoning": "The URL carries no credentials in this API, and the message is what an operator needs to find the failing call."
+				},
+				"adjudication": {
+					"verdict": "undecidable",
+					"reasoning": "Whether a URL may carry a token depends on callers this change does not show.",
+					"model": "openai/gpt-5-pro",
+					"thinking": "high",
+					"alias": "GPT Pro",
+					"tier": "frontier",
+					"family": "OpenAI"
+				}
+			},
+			{
+				"id": "c5",
 				"claim": "The timeout is read in seconds but passed as milliseconds.",
 				"location": {
 					"file": "src/config.ts",
@@ -122,13 +206,16 @@
 						"lens": "correctness",
 						"model": "anthropic/claude-haiku-4-5",
 						"thinking": "low",
+						"alias": "Haiku",
+						"tier": "light",
+						"family": "Anthropic",
 						"attemptId": "att-correctness-light",
 						"findingIndex": 1
 					}
 				],
 				"agreement": {
 					"count": 1,
-					"of": 2
+					"of": 3
 				},
 				"suggestions": [],
 				"raw": [
@@ -140,13 +227,69 @@
 				"disposition": {
 					"kind": "declined",
 					"reasoning": "TIMEOUT is documented in milliseconds and every caller passes milliseconds; converting it would break them."
+				},
+				"adjudication": {
+					"verdict": "upheld",
+					"reasoning": "The env file the README documents gives TIMEOUT in seconds, and setTimeout takes milliseconds.",
+					"model": "openai/gpt-5-pro",
+					"thinking": "high",
+					"alias": "GPT Pro",
+					"tier": "frontier",
+					"family": "OpenAI"
+				}
+			},
+			{
+				"id": "c6",
+				"claim": "An import in src/util.ts is unused.",
+				"location": {
+					"file": "src/util.ts",
+					"line": 3
+				},
+				"severity": "low",
+				"reportedBy": [
+					{
+						"lens": "hygiene",
+						"model": "anthropic/claude-haiku-4-5",
+						"thinking": "off",
+						"alias": "Haiku",
+						"tier": "fast",
+						"family": "Anthropic",
+						"attemptId": "att-hygiene-fast",
+						"findingIndex": 0
+					}
+				],
+				"agreement": {
+					"count": 1,
+					"of": 3
+				},
+				"suggestions": [],
+				"raw": [
+					{
+						"reviewerIndex": 3,
+						"findingIndex": 0
+					}
+				],
+				"disposition": {
+					"kind": "declined",
+					"reasoning": "The import is used by a type-only re-export the sweep does not see."
 				}
 			}
 		],
 		"normalizer": {
 			"mode": "model",
 			"model": "anthropic/claude-haiku-4-5",
-			"promptDigest": "f3587054d6d15ce35280bae8aeabca90d2713ba06a12918fba2dc0643b605af6"
+			"alias": "Haiku",
+			"tier": "light",
+			"family": "Anthropic",
+			"promptDigest": "ed98a386c32a886f03ca2e2052f48f132f02728461c37b2581bf619d9d8593a8"
+		},
+		"adjudicator": {
+			"model": "openai/gpt-5-pro",
+			"thinking": "high",
+			"alias": "GPT Pro",
+			"tier": "frontier",
+			"family": "OpenAI",
+			"promptDigest": "7e18c5d86e40e051d997973acdab7bfb902c3c037a90c90854929095ab651c19"
 		}
 	},
 	"check": {
@@ -155,5 +298,12 @@
 		"checkRan": true,
 		"checkPassed": true,
 		"checkTail": "Tests 42 passed"
+	},
+	"contested": {
+		"contested": 3,
+		"upheld": 1,
+		"overruled": 1,
+		"undecidable": 1,
+		"note": "Deliverable \"api\": 3 of 5 clusters were contested, so its spec is the likely problem, not its implementation."
 	}
 }

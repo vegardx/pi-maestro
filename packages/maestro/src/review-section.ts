@@ -1,11 +1,13 @@
 // The Review section: what reviewed a deliverable, what they found, and what
 // the implementer answered — rendered ONCE, read in three places.
 //
-// pi-workflow 5 records each reviewed deliverable as `reviews-<d>`: every
-// reviewer (lens, model, thinking, attempt, whether it reported), every cluster
-// of findings with who reported it and how many agreed, and the resumed
-// implementer's disposition for each — `fixed`, `declined` with its reasoning,
-// or `out-of-scope`. The harness wrote all of that attribution, never a model.
+// pi-workflow 8 records each reviewed deliverable as `reviews-<d>`: every
+// reviewer (lens, model, thinking, the tier the router reached, attempt,
+// whether it reported), every cluster of findings with who reported it and how
+// many agreed, the resumed implementer's disposition for each — `fixed`,
+// `declined` with its reasoning, or `out-of-scope` — and, on what it contested,
+// the adjudicator's verdict: `upheld`, `overruled` or `undecidable`. The harness
+// wrote all of that attribution, never a model.
 //
 // THREE SURFACES, ONE FUNCTION. The ship dialog's *Look first*, the account an
 // `auto` run posts after it publishes, and the pull request's body all show the
@@ -24,10 +26,47 @@
 // this module's own view, and an entry that does not read is counted rather
 // than silently dropped.
 
+import { TIER_IDS, type TierId } from "@vegardx/pi-models";
+
 /** The dispositions a resumed implementer answers with, in pi-workflow's words. */
 export const DISPOSITION_KINDS = ["fixed", "declined", "out-of-scope"] as const;
 
 export type DispositionKind = (typeof DISPOSITION_KINDS)[number];
+
+/** pi-workflow's `CONTESTED_DISPOSITION_KINDS`: the answers a judge rules on. */
+export const CONTESTED_DISPOSITION_KINDS = [
+	"declined",
+	"out-of-scope",
+] as const;
+
+/** What the adjudicator rules on a contested cluster, in pi-workflow's words. */
+export const ADJUDICATION_VERDICTS = [
+	"upheld",
+	"overruled",
+	"undecidable",
+] as const;
+
+export type AdjudicationVerdict = (typeof ADJUDICATION_VERDICTS)[number];
+
+/**
+ * Where a cluster stands once everybody has answered, worst first: the order a
+ * section lists them in.
+ *
+ * `upheld` is a reviewer's claim a judge said stands against the implementer's
+ * answer, so it leads. `declined` and `out-of-scope` here are the ones no
+ * verdict settled — never adjudicated, or ruled `undecidable`, which settles
+ * nothing. `overruled` is a contest the implementer won, and `fixed` is done.
+ */
+export const CLUSTER_STANDINGS = [
+	"upheld",
+	"declined",
+	"unanswered",
+	"out-of-scope",
+	"overruled",
+	"fixed",
+] as const;
+
+export type ClusterStanding = (typeof CLUSTER_STANDINGS)[number];
 
 /** A cluster's severity: the highest any of its reporters gave. */
 export const REVIEW_SEVERITIES = ["high", "medium", "low"] as const;
@@ -66,6 +105,8 @@ export interface ReviewerView {
 	readonly lens: string;
 	readonly model: string;
 	readonly thinking?: string;
+	/** The tier the router reached; absent for a pinned model. */
+	readonly tier?: TierId;
 	readonly status: "reported" | "failed";
 	readonly findings: number;
 }
@@ -74,6 +115,7 @@ export interface ReporterView {
 	readonly lens: string;
 	readonly model: string;
 	readonly thinking?: string;
+	readonly tier?: TierId;
 }
 
 export interface ClusterView {
@@ -86,6 +128,11 @@ export interface ClusterView {
 	readonly agreement: { readonly count: number; readonly of: number };
 	readonly disposition?: {
 		readonly kind: DispositionKind;
+		readonly reasoning: string;
+	};
+	/** Present only on a contested cluster the adjudicator ruled on. */
+	readonly adjudication?: {
+		readonly verdict: AdjudicationVerdict;
 		readonly reasoning: string;
 	};
 }
@@ -112,6 +159,12 @@ export interface ReviewSectionInput {
 	/** Absent when the deliverable listed no reviews. */
 	readonly reviews?: ReviewsView;
 	readonly check?: CheckView;
+	/**
+	 * pi-workflow's sentence when so much was contested that the spec is the
+	 * likely problem. Only a ship summary carries it; a gate says it in its
+	 * prompt instead.
+	 */
+	readonly specNote?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -147,7 +200,15 @@ function readReviewer(value: unknown): ReviewerView | undefined {
 	const findings = count(value.findings);
 	if (!lens || !model || !status || findings === undefined) return undefined;
 	const thinking = text(value.thinking);
-	return { lens, model, ...(thinking ? { thinking } : {}), status, findings };
+	const tier = oneOf(TIER_IDS, value.tier);
+	return {
+		lens,
+		model,
+		...(thinking ? { thinking } : {}),
+		...(tier ? { tier } : {}),
+		status,
+		findings,
+	};
 }
 
 function readReporter(value: unknown): ReporterView | undefined {
@@ -156,7 +217,13 @@ function readReporter(value: unknown): ReporterView | undefined {
 	const model = text(value.model);
 	if (!lens || !model) return undefined;
 	const thinking = text(value.thinking);
-	return { lens, model, ...(thinking ? { thinking } : {}) };
+	const tier = oneOf(TIER_IDS, value.tier);
+	return {
+		lens,
+		model,
+		...(thinking ? { thinking } : {}),
+		...(tier ? { tier } : {}),
+	};
 }
 
 function readCluster(value: unknown): ClusterView | undefined {
@@ -189,6 +256,11 @@ function readCluster(value: unknown): ClusterView | undefined {
 		: undefined;
 	const kind = oneOf(DISPOSITION_KINDS, disposition?.kind);
 	const reasoning = text(disposition?.reasoning);
+	const adjudication = isRecord(value.adjudication)
+		? value.adjudication
+		: undefined;
+	const verdict = oneOf(ADJUDICATION_VERDICTS, adjudication?.verdict);
+	const ruling = text(adjudication?.reasoning);
 	return {
 		id,
 		claim,
@@ -198,6 +270,9 @@ function readCluster(value: unknown): ClusterView | undefined {
 		reportedBy: reporters as ReporterView[],
 		agreement: { count: agreed, of },
 		...(kind && reasoning ? { disposition: { kind, reasoning } } : {}),
+		...(verdict && ruling
+			? { adjudication: { verdict, reasoning: ruling } }
+			: {}),
 	};
 }
 
@@ -261,12 +336,47 @@ export interface ReviewTally {
 	readonly outOfScope: number;
 	/** No disposition: no resume ran, or it was refused. */
 	readonly unanswered: number;
+	/** Clusters the implementer contested that a judge rules on. */
+	readonly contested: number;
+	readonly upheld: number;
+	readonly overruled: number;
+	readonly undecidable: number;
+}
+
+/**
+ * Whether a judge rules on this cluster: pi-workflow's `contestedClusters`.
+ *
+ * Every cluster the implementer declined or put out of scope, except one whose
+ * every reporter is a `fast` lens — a standing sweep's lead, not a claim worth
+ * a frontier model's time. Restated here because pi-workflow is not imported;
+ * `test/review-section.test.ts` holds the counts it gives equal to the ones
+ * pi-workflow wrote into the fixture's ship summary.
+ */
+export function isContested(cluster: ClusterView): boolean {
+	return (
+		cluster.disposition !== undefined &&
+		(CONTESTED_DISPOSITION_KINDS as readonly string[]).includes(
+			cluster.disposition.kind,
+		) &&
+		!cluster.reportedBy.every((reporter) => reporter.tier === "fast")
+	);
+}
+
+/** Where a cluster stands. @see CLUSTER_STANDINGS */
+export function standing(cluster: ClusterView): ClusterStanding {
+	const verdict = cluster.adjudication?.verdict;
+	if (verdict === "upheld" || verdict === "overruled") return verdict;
+	return cluster.disposition?.kind ?? "unanswered";
 }
 
 export function tallyReviews(reviews: ReviewsView): ReviewTally {
 	const answered = (kind: DispositionKind) =>
 		reviews.clusters.filter((cluster) => cluster.disposition?.kind === kind)
 			.length;
+	const ruled = (verdict: AdjudicationVerdict) =>
+		reviews.clusters.filter(
+			(cluster) => cluster.adjudication?.verdict === verdict,
+		).length;
 	return {
 		reviewers: reviews.reviewers.length,
 		reported: reviews.reviewers.filter((entry) => entry.status === "reported")
@@ -280,6 +390,10 @@ export function tallyReviews(reviews: ReviewsView): ReviewTally {
 		unanswered: reviews.clusters.filter(
 			(cluster) => cluster.disposition === undefined,
 		).length,
+		contested: reviews.clusters.filter(isContested).length,
+		upheld: ruled("upheld"),
+		overruled: ruled("overruled"),
+		undecidable: ruled("undecidable"),
 	};
 }
 
@@ -296,6 +410,10 @@ export function sumTallies(tallies: readonly ReviewTally[]): ReviewTally {
 		declined: sum("declined"),
 		outOfScope: sum("outOfScope"),
 		unanswered: sum("unanswered"),
+		contested: sum("contested"),
+		upheld: sum("upheld"),
+		overruled: sum("overruled"),
+		undecidable: sum("undecidable"),
 	};
 }
 
@@ -308,6 +426,14 @@ export function dispositionCounts(tally: ReviewTally): string {
 	return (
 		`${tally.fixed} fixed, ${tally.declined} declined, ` +
 		`${tally.outOfScope} out of scope, ${tally.unanswered} unanswered`
+	);
+}
+
+/** What the judge made of what the implementer contested, in one clause. */
+export function contestedCounts(tally: ReviewTally): string {
+	return (
+		`${tally.contested} contested (${tally.upheld} upheld, ` +
+		`${tally.overruled} overruled, ${tally.undecidable} undecidable)`
 	);
 }
 
@@ -333,25 +459,20 @@ function cut(value: string, max: number): string {
 	return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
 }
 
+/** A lens, the tier the router reached for it, and the model it ran on. */
 function who(entry: {
 	readonly lens: string;
 	readonly model: string;
 	readonly thinking?: string;
+	readonly tier?: TierId;
 }): string {
-	return `${entry.lens} (${entry.model}${entry.thinking ? `, ${entry.thinking}` : ""})`;
+	return `${entry.lens}${entry.tier ? ` [${entry.tier}]` : ""} (${entry.model}${entry.thinking ? `, ${entry.thinking}` : ""})`;
 }
 
-/** Declined first, then unanswered, out of scope, fixed; worst first within. */
-const ORDER: readonly (DispositionKind | "unanswered")[] = [
-	"declined",
-	"unanswered",
-	"out-of-scope",
-	"fixed",
-];
-
+/** By standing, worst first; by severity within a standing. */
 function rank(cluster: ClusterView): number {
 	return (
-		ORDER.indexOf(cluster.disposition?.kind ?? "unanswered") * 10 +
+		CLUSTER_STANDINGS.indexOf(standing(cluster)) * 10 +
 		REVIEW_SEVERITIES.indexOf(cluster.severity)
 	);
 }
@@ -365,10 +486,13 @@ export function renderCluster(cluster: ClusterView): string {
 	const answer = cluster.disposition
 		? `${cluster.disposition.kind} (${cut(cluster.disposition.reasoning, MAX_RENDERED_REASONING)})`
 		: "unanswered";
+	const ruling = cluster.adjudication
+		? ` · judge: ${cluster.adjudication.verdict} (${cut(cluster.adjudication.reasoning, MAX_RENDERED_REASONING)})`
+		: "";
 	return (
 		`- ${cut(cluster.claim, MAX_RENDERED_CLAIM)} — ${where}` +
 		` · found by ${by} ×${cluster.agreement.count} of ${cluster.agreement.of}` +
-		` · ${cluster.severity} · ${answer}`
+		` · ${cluster.severity} · ${answer}${ruling}`
 	);
 }
 
@@ -387,6 +511,15 @@ export function renderReviewSection(
 	const tally = tallyReviews(reviews);
 	lines.push(`Review of \`${input.id}\`: ${tallyLine(tally)}.`);
 	lines.push(checkLine(input.check));
+	lines.push(`Adjudication: ${contestedCounts(tally)}.`);
+	if (input.specNote) lines.push(input.specNote);
+	const upheld = reviews.clusters.filter(
+		(cluster) => standing(cluster) === "upheld",
+	);
+	if (upheld.length > 0)
+		lines.push(
+			`Upheld by the judge, the reviewer's claim stands: ${upheld.map((cluster) => cluster.id).join(", ")}.`,
+		);
 	const declined = reviews.clusters.filter(
 		(cluster) => cluster.disposition?.kind === "declined",
 	);
@@ -508,10 +641,15 @@ export function sectionsFromShipSummary(
 		if (!id) continue;
 		const reviews = readReviewsRecord(at(entry, "reviews"));
 		const check = readCheckReport(at(entry, "check"));
+		// Only the note is read off `contested`: the counts are the record's,
+		// worked out from it on both paths, so a gate and a summary cannot count
+		// the same record two ways.
+		const specNote = text(at(entry, "contested", "note"));
 		sections.push({
 			id,
 			...(reviews ? { reviews } : {}),
 			...(check ? { check } : {}),
+			...(specNote ? { specNote } : {}),
 		});
 	}
 	return sections;

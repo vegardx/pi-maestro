@@ -342,7 +342,7 @@ describe("readReceipt", () => {
 			"first",
 			"second",
 		]);
-		expect(read.receipt.reviews?.[0]?.reviews?.clusters).toHaveLength(3);
+		expect(read.receipt.reviews?.[0]?.reviews?.clusters).toHaveLength(5);
 		expect(read.receipt.reviews?.[1]?.reviews).toBeUndefined();
 	});
 
@@ -717,9 +717,12 @@ describe("publishPlan", () => {
 		expect(body).toContain("npm ci && npm run check");
 		expect(body).toContain("## Review");
 		expect(body).toContain(
-			"Review of `first`: 2 of 3 reviewers reported; 3 findings, 1 raised by two or more; 1 fixed, 1 declined, 1 out of scope, 0 unanswered.",
+			"Review of `first`: 3 of 4 reviewers reported; 5 findings, 1 raised by two or more; 1 fixed, 3 declined, 1 out of scope, 0 unanswered.",
 		);
-		expect(body).toContain("Declined, shipping as it is: c4.");
+		expect(body).toContain(
+			"Adjudication: 3 contested (1 upheld, 1 overruled, 1 undecidable).",
+		);
+		expect(body).toContain("Declined, shipping as it is: c4, c5, c6.");
 		expect(body).toContain("Review of `second`: no reviewers were asked.");
 		expect(body).toContain("Check: ran and failed.");
 	});
